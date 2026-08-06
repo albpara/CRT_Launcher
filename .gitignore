@@ -1,0 +1,9 @@
+# CMake build output (both build variants -- see CLAUDE.md)
+/build/
+/build-noconsole/
+
+# Editor/OS cruft
+.vscode/
+.vs/
+*.user
+Thumbs.db
