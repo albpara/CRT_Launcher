@@ -271,6 +271,8 @@ static int extract_games(const char *data, const char *platform, RawGameArray *a
         char id[LB_GUID_MAX];
         char emulator_id[LAUNCHBOX_ID_MAX];
         char favorite[8];
+        char region[LB_FIELD_MAX];
+        char version[LB_FIELD_MAX];
 
         xml_extract_field(p, block_end, "<Title>", "</Title>", title, sizeof(title));
         xml_extract_field(p, block_end, "<DatabaseID>", "</DatabaseID>", database_id, sizeof(database_id));
@@ -278,6 +280,8 @@ static int extract_games(const char *data, const char *platform, RawGameArray *a
         xml_extract_field(p, block_end, "<ID>", "</ID>", id, sizeof(id));
         xml_extract_field(p, block_end, "<Emulator>", "</Emulator>", emulator_id, sizeof(emulator_id));
         xml_extract_field(p, block_end, "<Favorite>", "</Favorite>", favorite, sizeof(favorite));
+        xml_extract_field(p, block_end, "<Region>", "</Region>", region, sizeof(region));
+        xml_extract_field(p, block_end, "<Version>", "</Version>", version, sizeof(version));
         trim_inplace(title);
         if (title[0] == '\0') {
             /* Some real LaunchBox entries have a blank or whitespace-only
@@ -300,7 +304,7 @@ static int extract_games(const char *data, const char *platform, RawGameArray *a
             snprintf(slot->rom_path, sizeof(slot->rom_path), "%s", rom_path);
             snprintf(slot->emulator_id, sizeof(slot->emulator_id), "%s", emulator_id);
             snprintf(slot->platform, sizeof(slot->platform), "%s", platform);
-            filename_without_ext(rom_path, slot->label, sizeof(slot->label));
+            build_version_label(region, version, rom_path, slot->label, sizeof(slot->label));
             slot->is_primary = SDL_TRUE;
             slot->is_favorite = (SDL_strcasecmp(favorite, "true") == 0) ? SDL_TRUE : SDL_FALSE;
             found++;

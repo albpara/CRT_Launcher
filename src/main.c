@@ -10,11 +10,6 @@
 #include "launcher.h"
 #include "render.h"
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
-
 #define CONFIG_PATH "config.ini"
 
 /* Bound for how many physical joysticks/pads we'll keep open at once --
@@ -39,24 +34,6 @@ static void open_all_joysticks(SDL_Joystick *joysticks[MAX_TRACKED_JOYSTICKS]) {
             }
         }
     }
-}
-
-/* Hides the console window Windows opens for this console-subsystem exe.
-   Best-effort only -- the OS creates that window before main() ever runs,
-   so there's an unavoidable brief flash before this can hide it. For a
-   build with no console at all (no flash, ever), build with
-   -DCRT_LAUNCHER_NO_CONSOLE=ON instead (see CMakeLists.txt) -- that
-   produces a WINDOWS-subsystem exe SDL_Log has nowhere to write to, so
-   this function becomes a permanent no-op there (GetConsoleWindow()
-   returns NULL) instead of doing anything at runtime. No-op on non-Windows
-   too. */
-static void hide_console_window(void) {
-#ifdef _WIN32
-    HWND console = GetConsoleWindow();
-    if (console) {
-        ShowWindow(console, SW_HIDE);
-    }
-#endif
 }
 
 /* Tracks one action's own held/repeat timing for continuous navigation,
@@ -272,10 +249,6 @@ int main(int argc, char *argv[]) {
     AppConfig cfg;
     config_load(CONFIG_PATH, &cfg);
 
-    if (!cfg.show_console) {
-        hide_console_window();
-    }
-
     /* Hidden whenever it's over one of this app's windows -- SDL restores
        the normal OS cursor automatically once it leaves. There's no on-
        screen pointer UI to click here, so it's just visual noise on the
@@ -486,6 +459,19 @@ int main(int argc, char *argv[]) {
                     gamelist.exit_confirm_open = SDL_FALSE;
                 }
             } else {
+                /* select_pressed and back_pressed are handled as mutually
+                   exclusive within a single frame (else if, not two plain
+                   ifs) -- both firing on the same frame is a real
+                   possibility (a controller chord, or SELECT/BACK sharing
+                   a fallback key with something else) and used to corrupt
+                   state: e.g. SELECT starting calibration (setting
+                   calibrating=TRUE, system_modal_open=TRUE) immediately
+                   followed by BACK's still-stale system_modal_open check
+                   closing the modal right back -- leaving calibration
+                   silently running with nothing on screen to show it. If
+                   both are pressed together now, only SELECT's action
+                   fires this frame; BACK just waits for a frame where it's
+                   pressed alone. */
                 if (select_pressed) {
                     if (gamelist_selected_is_system(&gamelist)) {
                         SDL_Log("[main] Starting calibration");
@@ -526,9 +512,7 @@ int main(int argc, char *argv[]) {
                             }
                         }
                     }
-                }
-
-                if (back_pressed) {
+                } else if (back_pressed) {
                     if (gamelist.selected_version >= 0) {
                         gamelist_toggle_expand(&gamelist, &launchbox); /* close the version modal first */
                     } else if (gamelist.system_modal_open) {

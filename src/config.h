@@ -76,7 +76,6 @@ typedef struct {
        keyboard repeat setting happens to be. */
     int nav_repeat_delay_ms;    /* how long a direction must be held before it starts repeating */
     int nav_repeat_interval_ms; /* time between repeats once it's repeating -- lower = faster */
-    SDL_bool show_console;      /* SDL_FALSE hides the console window Windows opens alongside the app */
     /* Indexed by InputAction. Defaults (if config.ini has no [bindings]
        section, or a given key is missing/unparsable) reproduce the app's
        original hardcoded keyboard-only behavior exactly -- Up/Down/Left/
@@ -92,7 +91,12 @@ typedef struct {
        on this install. main.c uses this to drop straight into the
        calibration flow on first launch instead of the game list. */
     SDL_bool bindings_calibrated;
-    char launchbox_dir[CONFIG_LAUNCHBOX_DIR_MAX]; /* LaunchBox install root, empty = not configured */
+    /* LaunchBox install root. If config.ini leaves this blank, config_load
+       falls back to checking for a LaunchBox install as a sibling of this
+       exe's own folder (e.g. "Cabinet\CRT Launcher\" next to
+       "Cabinet\LaunchBox\") before giving up -- still empty here only if
+       neither an explicit setting nor that fallback found one. */
+    char launchbox_dir[CONFIG_LAUNCHBOX_DIR_MAX];
 } AppConfig;
 
 /* Reads `path` (INI format) into `out`. Logs what was loaded, what was

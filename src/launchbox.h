@@ -21,9 +21,13 @@ typedef enum {
    mechanism for regional/hardware variants, e.g. a game's Japan/USA/World
    ROMs). Several of these can belong to the same LaunchboxGameGroup. */
 typedef struct {
-    char label[LAUNCHBOX_VERSION_LABEL_MAX]; /* Region+Version if from an AdditionalApplication
-                                                  (e.g. "(World 940223)"), else ROM filename minus
-                                                  extension (e.g. "atetris") */
+    char label[LAUNCHBOX_VERSION_LABEL_MAX]; /* this entry's own <Version> if set (e.g. "(World
+                                                  940223)"), else <Region> (e.g. "North America"),
+                                                  else the ROM filename minus extension (e.g.
+                                                  "atetris") -- same fallback order whether this
+                                                  entry came from a <Game> block or one of its
+                                                  <AdditionalApplication> siblings, see
+                                                  build_version_label in launchbox.c */
     char rom_path[LAUNCHBOX_ROM_PATH_MAX];   /* this entry's own <ApplicationPath>, relative to
                                                   launchbox_dir, e.g. "Roms\0.262\springer.zip" */
     char emulator_id[LAUNCHBOX_ID_MAX];      /* this entry's own emulator (<Emulator> on a <Game>,
@@ -73,7 +77,9 @@ typedef struct {
  *
  * For each platform XML found, reads every <Game>...</Game> block (a
  * bounded search within each block, not a global one -- see launchbox.c)
- * for its Title, DatabaseID, ApplicationPath, ID, and Emulator. It then
+ * for its Title, DatabaseID, ApplicationPath, ID, Emulator, Favorite,
+ * Region, and Version (the last two feed its version-picker label the same
+ * way as an AdditionalApplication's, see LaunchboxVersion.label). It then
  * reads every <AdditionalApplication>...</AdditionalApplication> block --
  * LaunchBox's *other* mechanism for "this game has multiple versions",
  * used for things like per-region ROMs where each version is its own

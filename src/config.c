@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #define CONFIG_DEFAULT_WIDTH  320
 #define CONFIG_DEFAULT_HEIGHT 240
 #define CONFIG_DEFAULT_REFRESH 60
@@ -34,16 +39,6 @@ static char *trim(char *s) {
         *end-- = '\0';
     }
     return s;
-}
-
-static SDL_bool parse_bool(const char *value, SDL_bool fallback) {
-    if (SDL_strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
-        return SDL_TRUE;
-    }
-    if (SDL_strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
-        return SDL_FALSE;
-    }
-    return fallback;
 }
 
 static SDL_Keycode parse_hotkey(const char *name) {
@@ -154,6 +149,53 @@ void input_binding_to_string(const InputBinding *b, char *out, size_t out_cap) {
     }
 }
 
+#ifdef _WIN32
+/* SDL_TRUE if `dir\Data\Platforms` exists and is a real directory -- the
+   same check launchbox.c itself does before trusting a launchbox_dir, used
+   here too so auto-detection can't succeed on a folder that merely happens
+   to be named right. */
+static SDL_bool looks_like_launchbox_install(const char *dir) {
+    char platforms_dir[CONFIG_LAUNCHBOX_DIR_MAX];
+    snprintf(platforms_dir, sizeof(platforms_dir), "%s\\Data\\Platforms", dir);
+    DWORD attrs = GetFileAttributesA(platforms_dir);
+    return (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) ? SDL_TRUE : SDL_FALSE;
+}
+
+/* Falls back to a LaunchBox install living as a sibling of this exe's own
+   folder (e.g. "Cabinet\CRT Launcher\crt_launcher.exe" next to
+   "Cabinet\LaunchBox\") -- a natural layout for something meant to replace
+   BigBox on the same machine. Deliberately based on the exe's own
+   directory (GetModuleFileNameA), not the current working directory --
+   CWD depends on how the app was launched (a shortcut's "Start in" field,
+   a script, etc.) and isn't reliable for "sibling of the exe" the way the
+   exe's own path is. Only ever consulted when config.ini leaves
+   launchbox_dir blank, so it never overrides an explicit setting. Returns
+   SDL_TRUE and fills `out` only if a real-looking install was found. */
+static SDL_bool autodetect_launchbox_dir(char *out, size_t out_cap) {
+    char exe_path[CONFIG_LAUNCHBOX_DIR_MAX];
+    DWORD len = GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
+    if (len == 0 || len >= sizeof(exe_path)) {
+        return SDL_FALSE;
+    }
+
+    char *last_sep = strrchr(exe_path, '\\');
+    if (!last_sep) {
+        return SDL_FALSE;
+    }
+    *last_sep = '\0'; /* exe_path is now the exe's own directory */
+
+    char candidate[CONFIG_LAUNCHBOX_DIR_MAX];
+    snprintf(candidate, sizeof(candidate), "%s\\..\\LaunchBox", exe_path);
+
+    if (!looks_like_launchbox_install(candidate)) {
+        return SDL_FALSE;
+    }
+
+    snprintf(out, out_cap, "%s", candidate);
+    return SDL_TRUE;
+}
+#endif /* _WIN32 */
+
 void config_load(const char *path, AppConfig *out) {
     out->width = CONFIG_DEFAULT_WIDTH;
     out->height = CONFIG_DEFAULT_HEIGHT;
@@ -161,7 +203,6 @@ void config_load(const char *path, AppConfig *out) {
     out->toggle_hotkey = CONFIG_DEFAULT_HOTKEY;
     out->nav_repeat_delay_ms = CONFIG_DEFAULT_NAV_REPEAT_DELAY_MS;
     out->nav_repeat_interval_ms = CONFIG_DEFAULT_NAV_REPEAT_INTERVAL_MS;
-    out->show_console = SDL_TRUE;
     out->bindings[INPUT_ACTION_UP] = make_keyboard_binding(SDLK_UP);
     out->bindings[INPUT_ACTION_DOWN] = make_keyboard_binding(SDLK_DOWN);
     out->bindings[INPUT_ACTION_LEFT] = make_keyboard_binding(SDLK_LEFT);
@@ -226,10 +267,6 @@ void config_load(const char *path, AppConfig *out) {
             } else if (strcmp(key, "nav_repeat_interval_ms") == 0) {
                 out->nav_repeat_interval_ms = atoi(value);
             }
-        } else if (strcmp(section, "debug") == 0) {
-            if (strcmp(key, "show_console") == 0) {
-                out->show_console = parse_bool(value, SDL_TRUE);
-            }
         } else if (strcmp(section, "bindings") == 0) {
             for (int a = 0; a < INPUT_ACTION_COUNT; a++) {
                 if (strcmp(key, INPUT_ACTION_CONFIG_KEYS[a]) == 0) {
@@ -268,11 +305,21 @@ void config_load(const char *path, AppConfig *out) {
         out->nav_repeat_interval_ms = CONFIG_DEFAULT_NAV_REPEAT_INTERVAL_MS;
     }
 
+#ifdef _WIN32
+    if (!out->launchbox_dir[0]) {
+        char detected[CONFIG_LAUNCHBOX_DIR_MAX];
+        if (autodetect_launchbox_dir(detected, sizeof(detected))) {
+            SDL_Log("[config] launchbox_dir not set -- found a sibling LaunchBox install at '%s', using it",
+                    detected);
+            snprintf(out->launchbox_dir, sizeof(out->launchbox_dir), "%s", detected);
+        }
+    }
+#endif
+
     SDL_Log("[config] Loaded '%s': low-res mode = %dx%d@%dHz, toggle hotkey = %s, "
-            "nav repeat = %dms delay / %dms interval, console = %s",
+            "nav repeat = %dms delay / %dms interval",
             path, out->width, out->height, out->refresh_rate,
-            SDL_GetKeyName(out->toggle_hotkey), out->nav_repeat_delay_ms, out->nav_repeat_interval_ms,
-            out->show_console ? "shown" : "hidden");
+            SDL_GetKeyName(out->toggle_hotkey), out->nav_repeat_delay_ms, out->nav_repeat_interval_ms);
     SDL_Log("[config] LaunchBox dir = %s",
             out->launchbox_dir[0] ? out->launchbox_dir : "(not configured)");
 

@@ -88,12 +88,9 @@ already on `CMAKE_PREFIX_PATH` through the MinGW install. The executable,
 ### Optional: a no-console build for deployment
 
 The default build is a console-subsystem exe -- that's the terminal window
-you see alongside the app, where `SDL_Log` output goes. `config.ini`'s
-`[debug] show_console=false` can hide that window, but since Windows
-creates it before the app's own code runs, there's an unavoidable brief
-flash first. For a build where no console is ever created at all -- no
-flash, nothing -- configure a *separate* build directory with
-`CRT_LAUNCHER_NO_CONSOLE=ON`:
+you see alongside the app, where `SDL_Log` output goes. For a build where
+no console is ever created at all, configure a *separate* build directory
+with `CRT_LAUNCHER_NO_CONSOLE=ON`:
 
 ```bash
 cmake -B build-noconsole -G "MinGW Makefiles" -DCRT_LAUNCHER_NO_CONSOLE=ON
@@ -169,9 +166,6 @@ toggle_hotkey=F5
 nav_repeat_delay_ms=250
 nav_repeat_interval_ms=40
 
-[debug]
-show_console=true
-
 [launchbox]
 launchbox_dir=
 ```
@@ -186,10 +180,6 @@ launchbox_dir=
   itself (not the OS's keyboard repeat rate), so they're actually tunable.
   Delay is how long a direction must be held before it starts repeating;
   interval is the time between repeats once it's going (lower = faster).
-- `show_console` set to `false` hides the console window that opens
-  alongside the app on Windows (SDL_Log still logs to it, it's just not
-  visible) -- there's an unavoidable brief flash on startup before it hides,
-  since Windows creates the console before the app's own code can run.
 - `launchbox_dir` is an optional path to a **LaunchBox install root** -- the
   folder containing `LaunchBox.exe` and a `Data` subfolder (e.g.
   `E:\LaunchBox`), not a single export file. Pointing at the root rather
@@ -199,8 +189,11 @@ launchbox_dir=
   `<launchbox_dir>\Data\Platforms` and `Data\Emulators.xml` -- and nothing
   else under the install -- sorts the resulting game list alphabetically
   (case-insensitive), and shows the count/list both on screen and in the
-  log. Leave blank to skip -- the screen just shows
-  `LAUNCHBOX: NOT CONFIGURED` instead, and Enter does nothing.
+  log. If left blank, the app also tries to auto-detect a LaunchBox install
+  as a sibling of its own folder (e.g. `Cabinet\LaunchBox` next to
+  `Cabinet\CRT Launcher`) before giving up; set it explicitly if your
+  install lives somewhere else. If neither finds anything, the screen just
+  shows `LAUNCHBOX: NOT CONFIGURED` instead, and Enter does nothing.
 
 Changes take effect on the next launch -- there's no hot-reload.
 

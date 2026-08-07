@@ -5,15 +5,13 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # OFF (default): a normal console-subsystem exe -- the terminal that opens
-# alongside it is where SDL_Log's output goes, and config.ini's
-# [debug] show_console lets you hide that window at runtime without
-# rebuilding, handy while developing.
+# alongside it is where SDL_Log's output goes, handy while developing.
 # ON: a WINDOWS-subsystem exe -- Windows never creates a console for it at
-# all, so there's no window to hide and no startup flash either, but
-# SDL_Log has nowhere to write to. Build a separate directory with this ON
-# (e.g. `cmake -B build-noconsole -DCRT_LAUNCHER_NO_CONSOLE=ON`) for real
-# cabinet deployment once you're done watching the log; keep the default
-# OFF build for day-to-day development.
+# all, so there's nothing to see and no startup flash either, but SDL_Log
+# has nowhere to write to. Build a separate directory with this ON (e.g.
+# `cmake -B build-noconsole -DCRT_LAUNCHER_NO_CONSOLE=ON`) for real cabinet
+# deployment once you're done watching the log; keep the default OFF build
+# for day-to-day development.
 option(CRT_LAUNCHER_NO_CONSOLE "Build as a WINDOWS-subsystem exe with no console window at all" OFF)
 
 add_executable(crt_launcher

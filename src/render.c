@@ -38,10 +38,14 @@ static const SDL_Color COLOR_GRID_B = {70, 70, 90, 255};
 static const SDL_Color COLOR_TEXT = {80, 255, 120, 255};
 static const SDL_Color COLOR_FAVORITE = {255, 220, 40, 255};
 static const SDL_Color COLOR_SYSTEM = {140, 140, 150, 255};
+static const SDL_Color COLOR_EXIT = {255, 70, 70, 255};
 static const SDL_Color COLOR_TEXT_SHADOW = {0, 0, 0, 255};
 static const SDL_Color COLOR_SELECT_TEXT = {10, 10, 15, 255};
 static const SDL_Color COLOR_MODAL_DIM = {0, 0, 0, 180};
 static const SDL_Color COLOR_MODAL_BG = {16, 16, 22, 255};
+
+/* Only A-Z, space, etc -- see font_data.h's supported character set. */
+static const char *const APP_TITLE = "CRT LAUNCHER";
 
 SDL_bool render_init(SDL_Window *window, RenderContext *rc) {
     /* Must be set before SDL_CreateRenderer -- "0"/"nearest" disables any
@@ -309,67 +313,21 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
     draw_checkerboard(renderer, dc->width, dc->height);
 
-    char line1[64];
-    char line2[64];
-    char line3[64];
-    char line4[64];
-    char line5[64];
-    char line6[64];
-    char line7[64];
-    char line8[64];
-
-    if (dc->mode == DISPLAY_MODE_LOWRES) {
-        snprintf(line1, sizeof(line1), "MODE: LOW-RES");
-        if (dc->refresh_rate > 0) {
-            snprintf(line2, sizeof(line2), "%dX%d @ %dHZ", dc->width, dc->height, dc->refresh_rate);
-        } else {
-            snprintf(line2, sizeof(line2), "%dX%d", dc->width, dc->height);
-        }
-        snprintf(line3, sizeof(line3), dc->lowres_is_exclusive
-                 ? "EXCLUSIVE FULLSCREEN"
-                 : "WINDOWED FALLBACK (NO MODE MATCH)");
-    } else {
-        snprintf(line1, sizeof(line1), "MODE: DESKTOP");
-        if (dc->refresh_rate > 0) {
-            snprintf(line2, sizeof(line2), "%dX%d @ %dHZ", dc->width, dc->height, dc->refresh_rate);
-        } else {
-            snprintf(line2, sizeof(line2), "%dX%d", dc->width, dc->height);
-        }
-        snprintf(line3, sizeof(line3), "FULLSCREEN DESKTOP");
-    }
-    snprintf(line4, sizeof(line4), "PRESS %s TO TOGGLE", SDL_GetKeyName(cfg->toggle_hotkey));
-
-    switch (lb->status) {
-        case LAUNCHBOX_STATUS_LOADED:
-            snprintf(line5, sizeof(line5), "LAUNCHBOX: %d PLATFORMS, %d GAMES (%d UNIQUE)",
-                     lb->platform_count, lb->version_count, lb->group_count);
-            break;
-        case LAUNCHBOX_STATUS_DIR_NOT_FOUND:
-            snprintf(line5, sizeof(line5), "LAUNCHBOX: DATA DIR NOT FOUND");
-            break;
-        case LAUNCHBOX_STATUS_NO_PLATFORMS:
-            snprintf(line5, sizeof(line5), "LAUNCHBOX: NO PLATFORM XML FOUND");
-            break;
-        case LAUNCHBOX_STATUS_NOT_CONFIGURED:
-        default:
-            snprintf(line5, sizeof(line5), "LAUNCHBOX: NOT CONFIGURED");
-            break;
-    }
+    char game_count_line[64];
 
     /* The system section (gamelist_system_entry_labels) is always present,
        even with zero LaunchBox games loaded -- calibration shouldn't
-       require LaunchBox to be configured first -- so these lines and the
-       list below are unconditional now, unlike line5 above. */
+       require LaunchBox to be configured first. "OF" instead of a literal
+       "/" -- the font has no slash glyph (see font_data.h's supported
+       character set), so a '/' would render as FONT_UNKNOWN's diamond. */
     if (gamelist_selected_is_system(gl)) {
-        snprintf(line6, sizeof(line6), "SETTINGS");
+        snprintf(game_count_line, sizeof(game_count_line), "SETTINGS");
     } else if (lb->group_count > 0) {
-        snprintf(line6, sizeof(line6), "GAME %d/%d",
+        snprintf(game_count_line, sizeof(game_count_line), "GAME %d OF %d",
                  gl->selected_group - GAMELIST_SYSTEM_ENTRY_COUNT + 1, lb->group_count);
     } else {
-        snprintf(line6, sizeof(line6), "NO GAMES LOADED");
+        snprintf(game_count_line, sizeof(game_count_line), "NO GAMES LOADED");
     }
-    snprintf(line7, sizeof(line7), "UP/DN SELECT   L/R LETTER");
-    snprintf(line8, sizeof(line8), "ENTER LAUNCH   SHIFT-ENTER VERSIONS");
 
     int text_scale = compute_text_scale(dc->width, dc->height, cfg->width, cfg->height);
     int text_margin = BASE_TEXT_MARGIN * text_scale;
@@ -377,14 +335,18 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
     int y = text_margin;
 
-    draw_text_with_shadow(renderer, line1, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
-    draw_text_with_shadow(renderer, line2, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
-    draw_text_with_shadow(renderer, line3, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
-    draw_text_with_shadow(renderer, line4, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
-    draw_text_with_shadow(renderer, line5, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
-    draw_text_with_shadow(renderer, line6, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
-    draw_text_with_shadow(renderer, line7, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
-    draw_text_with_shadow(renderer, line8, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    /* App title, centered horizontally, at double the base text size so it
+       reads as a header rather than just another status line. */
+    int title_scale = text_scale * 2;
+    int title_line_h = FONT_GLYPH_HEIGHT * title_scale + BASE_TEXT_LINE_GAP * title_scale;
+    int title_w = (int)strlen(APP_TITLE) * (FONT_GLYPH_WIDTH + 1) * title_scale;
+    int title_x = (dc->width - title_w) / 2;
+    draw_text_with_shadow(renderer, APP_TITLE, title_x, y, title_scale, COLOR_TEXT);
+    y += title_line_h;
+
+    int game_count_w = (int)strlen(game_count_line) * (FONT_GLYPH_WIDTH + 1) * text_scale;
+    int game_count_x = dc->width - text_margin - game_count_w;
+    draw_text_with_shadow(renderer, game_count_line, game_count_x, y, text_scale, COLOR_TEXT); y += line_h;
 
     /* Separator between the status header and the scrollable list below it
        -- same "thin border-colored rect" look as the modal's title
@@ -444,12 +406,14 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     } else if (gl->exit_confirm_open) {
         /* Not tied to a system-menu row -- triggered by BACK at the top
            level of the main list, see main.c. Reuses the same generic
-           modal primitive as everything else. No question mark in the
-           title/body -- the font doesn't have one (see font_data.h), an
-           unsupported character would just render as a diamond. */
-        static const char *const items[] = {"PRESS ENTER TO CONFIRM", "PRESS ESC TO GO BACK"};
+           modal primitive as everything else. Generic action names, not
+           literal key names -- see the line8 comment above for why. No
+           question mark in the title/body -- the font doesn't have one
+           (see font_data.h), an unsupported character would just render
+           as a diamond. */
+        static const char *const items[] = {"PRESS SELECT TO CONFIRM", "PRESS BACK TO GO BACK"};
         render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
-                                "EXIT", items, 2, -1, 0, COLOR_TEXT);
+                                "EXIT", items, 2, -1, 0, COLOR_EXIT);
     }
 
     SDL_RenderPresent(renderer);
