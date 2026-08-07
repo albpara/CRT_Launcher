@@ -43,6 +43,25 @@ typedef struct {
     SDL_bool system_modal_open; /* the focused system entry's own modal --
                                     placeholder for now, no real behavior
                                     wired up yet */
+    char system_modal_status[64]; /* freeform text the system modal shows as
+                                      its body -- main.c owns what goes in
+                                      here (currently the Calibrate Controls
+                                      flow's "press input for X" prompts and
+                                      its completion message), render.c just
+                                      displays it */
+    char system_modal_hint[64];   /* optional second, un-highlighted line
+                                      below system_modal_status -- empty
+                                      string means "don't show one". Used
+                                      for the "ESC WILL EXIT CALIBRATION"
+                                      reminder while a calibration step is
+                                      active; main.c clears it for the
+                                      completion message, where Esc no
+                                      longer has that special meaning */
+    SDL_bool exit_confirm_open; /* SDL_TRUE while the "really quit?"
+                                    confirmation (triggered by BACK at the
+                                    top level of the main list) is up --
+                                    distinct from system_modal_open, since
+                                    this isn't tied to any system-menu row */
     int scroll_offset;     /* row index (same unified space as selected_group)
                                of the topmost row currently drawn */
 } GameListState;
@@ -62,8 +81,13 @@ SDL_bool gamelist_selected_is_system(const GameListState *state);
    wrapping across the whole unified row space (system rows, then groups)
    at the ends. If the version-picker modal is open, this instead wraps
    within its rows only (0..version_count-1) and never touches
-   selected_group. Always active, even if `lb` has zero groups -- the
-   system rows still need to be navigable then. */
+   selected_group. No-op while a system entry's own modal is open
+   (system_modal_open) or the exit confirmation is (exit_confirm_open) --
+   neither has anything to navigate, and moving selected_group out from
+   under the system modal specifically would corrupt render.c's
+   gamelist_system_entry_labels[] lookup. Otherwise always active, even if
+   `lb` has zero groups -- the system rows still need to be navigable
+   then. */
 void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta);
 
 /* Jumps to the start of the next (`direction` > 0) or previous
@@ -73,16 +97,18 @@ void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta);
    entries, so it works fine against the favorites-first order described
    on LaunchboxInfo (a letter can then appear as two separate runs -- once
    in the favorites block, once in the rest -- and this just visits both in
-   turn). No-op if `lb` has zero groups or the current selection is a
-   system row -- letter-jumping is a real-games-only feature. */
+   turn). No-op if `lb` has zero groups, the current selection is a system
+   row, or a modal (system or exit-confirm) is open -- letter-jumping is a
+   real-games-only feature. */
 void gamelist_jump_letter(GameListState *state, const LaunchboxInfo *lb, int direction);
 
 /* Opens or closes the version-picker modal for the selected group (bound
    to Shift+Enter, and to Esc while it's open). Opening focuses version 0;
    closing refocuses the group's own row. No-op if the group has only one
-   version -- nothing to pick -- if `lb` has zero groups, or if the current
+   version -- nothing to pick -- if `lb` has zero groups, if the current
    selection is a system row (system entries have their own modal --
-   system_modal_open -- driven separately by main.c). */
+   system_modal_open -- driven separately by main.c), or if the exit
+   confirmation is open. */
 void gamelist_toggle_expand(GameListState *state, const LaunchboxInfo *lb);
 
 /* Adjusts scroll_offset (a row index in the same unified space as

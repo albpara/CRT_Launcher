@@ -24,6 +24,14 @@
    above any real LaunchBox game's version count (the largest observed while
    building this was 9), just a safety bound, not a expected-case limit. */
 #define MODAL_MAX_ITEMS 128
+/* Minimum width, in glyph columns, for the system-entry modal (e.g.
+   Calibrate Controls) -- it still grows past this for a longer line, but
+   never shrinks below it, so the box doesn't visibly resize as the
+   calibration prompt changes length between steps ("PRESS INPUT FOR UP"
+   vs "...FOR MODIFIER" vs the longer completion message). Not exposed as
+   a config setting -- deliberately fixed, per user request, to keep the
+   app's surface area small. */
+#define SYSTEM_MODAL_WIDTH_CHARS 42
 
 static const SDL_Color COLOR_GRID_A = {32, 32, 40, 255};
 static const SDL_Color COLOR_GRID_B = {70, 70, 90, 255};
@@ -34,7 +42,6 @@ static const SDL_Color COLOR_TEXT_SHADOW = {0, 0, 0, 255};
 static const SDL_Color COLOR_SELECT_TEXT = {10, 10, 15, 255};
 static const SDL_Color COLOR_MODAL_DIM = {0, 0, 0, 180};
 static const SDL_Color COLOR_MODAL_BG = {16, 16, 22, 255};
-static const SDL_Color COLOR_MODAL_BORDER = {80, 255, 120, 255};
 
 SDL_bool render_init(SDL_Window *window, RenderContext *rc) {
     /* Must be set before SDL_CreateRenderer -- "0"/"nearest" disables any
@@ -107,12 +114,12 @@ static int draw_text(SDL_Renderer *renderer, const char *text, int x, int y, int
     return cursor_x - x; /* total pixel width drawn */
 }
 
-static void draw_text_with_shadow(SDL_Renderer *renderer, const char *text, int x, int y, int scale) {
+static void draw_text_with_shadow(SDL_Renderer *renderer, const char *text, int x, int y, int scale, SDL_Color color) {
     /* Shadow offset is `scale` pixels (not a fixed 1px) so the drop shadow
        stays proportionally visible instead of shrinking to nothing once
        the glyphs themselves get bigger. */
     draw_text(renderer, text, x + scale, y + scale, scale, COLOR_TEXT_SHADOW);
-    draw_text(renderer, text, x, y, scale, COLOR_TEXT);
+    draw_text(renderer, text, x, y, scale, color);
 }
 
 /* Largest integer multiple of BASE_TEXT_SCALE that still lets the low-res
@@ -209,16 +216,22 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
 
 /* Draws a full-screen dim overlay plus a centered, bordered box listing
    `items` (`item_count` C strings), highlighting `selected_index`, with
-   `title` as a header above them (pass NULL to omit). Sizes itself to fit
-   the longest string, clamped to the window so it can't overflow on a
-   tiny low-res screen.
+   `title` as a header above them (pass NULL to omit). Sized to fit the
+   longest string or `min_width_chars` (0 = ignore, size purely from
+   content), whichever is wider, clamped to the window so it can't
+   overflow on a tiny low-res screen.
+
+   `accent_color` themes the border, separator, title, and unselected/base
+   item text (and doubles as the selected-row highlight color, via
+   draw_row) -- e.g. yellow for a favorite's version picker, gray for the
+   system menu, matching what the row that opened the modal used.
 
    Deliberately generic -- takes plain strings, knows nothing about games
    or versions -- so any future modal list (e.g. a settings menu) can
    reuse it as-is; it's just "a titled list of choices, one highlighted". */
 void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int text_scale,
                              const char *title, const char *const *items, int item_count,
-                             int selected_index) {
+                             int selected_index, int min_width_chars, SDL_Color accent_color) {
     int line_h = FONT_GLYPH_HEIGHT * text_scale + BASE_TEXT_LINE_GAP * text_scale;
     int padding = BASE_MODAL_PADDING * text_scale;
     int glyph_advance = (FONT_GLYPH_WIDTH + 1) * text_scale;
@@ -229,6 +242,9 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
         if (len > max_chars) {
             max_chars = len;
         }
+    }
+    if (min_width_chars > max_chars) {
+        max_chars = min_width_chars;
     }
 
     /* A separator between the title and the list only makes sense if
@@ -258,7 +274,7 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
     SDL_Rect outer = {box_x - border, box_y - border, box_w + border * 2, box_h + border * 2};
-    SDL_SetRenderDrawColor(renderer, COLOR_MODAL_BORDER.r, COLOR_MODAL_BORDER.g, COLOR_MODAL_BORDER.b, 255);
+    SDL_SetRenderDrawColor(renderer, accent_color.r, accent_color.g, accent_color.b, 255);
     SDL_RenderFillRect(renderer, &outer);
 
     SDL_Rect inner = {box_x, box_y, box_w, box_h};
@@ -267,19 +283,19 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
 
     int y = box_y + padding;
     if (title) {
-        draw_text_with_shadow(renderer, title, box_x + padding, y, text_scale);
+        draw_text_with_shadow(renderer, title, box_x + padding, y, text_scale, accent_color);
         y += line_h;
     }
 
     if (has_separator) {
         SDL_Rect sep = {box_x + padding, y + (line_h - border) / 2, box_w - padding * 2, border};
-        SDL_SetRenderDrawColor(renderer, COLOR_MODAL_BORDER.r, COLOR_MODAL_BORDER.g, COLOR_MODAL_BORDER.b, 255);
+        SDL_SetRenderDrawColor(renderer, accent_color.r, accent_color.g, accent_color.b, 255);
         SDL_RenderFillRect(renderer, &sep);
         y += line_h;
     }
 
     for (int i = 0; i < item_count; i++) {
-        draw_row(renderer, items[i], box_x + padding, box_x, box_w, y, line_h, text_scale, i == selected_index, COLOR_TEXT);
+        draw_row(renderer, items[i], box_x + padding, box_x, box_w, y, line_h, text_scale, i == selected_index, accent_color);
         y += line_h;
     }
 }
@@ -361,14 +377,14 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
     int y = text_margin;
 
-    draw_text_with_shadow(renderer, line1, text_margin, y, text_scale); y += line_h;
-    draw_text_with_shadow(renderer, line2, text_margin, y, text_scale); y += line_h;
-    draw_text_with_shadow(renderer, line3, text_margin, y, text_scale); y += line_h;
-    draw_text_with_shadow(renderer, line4, text_margin, y, text_scale); y += line_h;
-    draw_text_with_shadow(renderer, line5, text_margin, y, text_scale); y += line_h;
-    draw_text_with_shadow(renderer, line6, text_margin, y, text_scale); y += line_h;
-    draw_text_with_shadow(renderer, line7, text_margin, y, text_scale); y += line_h;
-    draw_text_with_shadow(renderer, line8, text_margin, y, text_scale); y += line_h;
+    draw_text_with_shadow(renderer, line1, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, line2, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, line3, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, line4, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, line5, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, line6, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, line7, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, line8, text_margin, y, text_scale, COLOR_TEXT); y += line_h;
 
     /* Separator between the status header and the scrollable list below it
        -- same "thin border-colored rect" look as the modal's title
@@ -401,15 +417,39 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
             items[i] = lb->versions[grp->version_start + i].label;
         }
 
+        /* Favorite's version picker highlights yellow, matching the row
+           that opened it; any other game's stays the default green. */
+        SDL_Color accent = grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
         render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
-                                grp->title, items, item_count, gl->selected_version);
+                                grp->title, items, item_count, gl->selected_version, 0, accent);
     } else if (gl->system_modal_open) {
-        /* Placeholder body -- no real calibration flow wired up yet, this
-           just proves the entry point opens something. */
-        static const char *const placeholder_items[] = {"COMING SOON"};
+        /* Body text is whatever main.c put in system_modal_status -- for
+           Calibrate Controls that's the current "press input for X" prompt
+           or the completion message (see main.c). Given a fixed minimum
+           width (rather than 0/auto) so the box doesn't visibly resize as
+           the prompt text changes length between calibration steps, and
+           gray to match the system row itself. system_modal_hint, when
+           non-empty, adds a second un-highlighted line below it (e.g. the
+           "ESC WILL EXIT CALIBRATION" reminder) -- main.c decides when
+           there's one to show. */
+        const char *items[2];
+        int item_count = 0;
+        items[item_count++] = gl->system_modal_status;
+        if (gl->system_modal_hint[0]) {
+            items[item_count++] = gl->system_modal_hint;
+        }
         render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
                                 gamelist_system_entry_labels[gl->selected_group],
-                                placeholder_items, 1, -1);
+                                items, item_count, -1, SYSTEM_MODAL_WIDTH_CHARS, COLOR_SYSTEM);
+    } else if (gl->exit_confirm_open) {
+        /* Not tied to a system-menu row -- triggered by BACK at the top
+           level of the main list, see main.c. Reuses the same generic
+           modal primitive as everything else. No question mark in the
+           title/body -- the font doesn't have one (see font_data.h), an
+           unsupported character would just render as a diamond. */
+        static const char *const items[] = {"PRESS ENTER TO CONFIRM", "PRESS ESC TO GO BACK"};
+        render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
+                                "EXIT", items, 2, -1, 0, COLOR_TEXT);
     }
 
     SDL_RenderPresent(renderer);

@@ -32,8 +32,15 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
 /* Draws a full-screen dim overlay plus a centered, bordered box listing
    `items` (`item_count` C strings), highlighting `selected_index`, with
-   `title` as a header above them (pass NULL to omit). Sizes itself to fit
-   the longest string, clamped to the window.
+   `title` as a header above them (pass NULL to omit). Sized to fit the
+   longest string OR `min_width_chars`, whichever is wider (pass 0 for
+   `min_width_chars` to size purely from content, as before) -- clamped to
+   the window either way so it can't overflow on a tiny low-res screen.
+   Useful for a modal whose body text changes a lot between draws (e.g. the
+   calibration flow's "PRESS INPUT FOR X" prompts), so the box doesn't keep
+   resizing itself as the text changes length. `accent_color` themes the
+   border, separator, title, and item text/highlight -- e.g. yellow for a
+   favorite's version picker, gray for the system menu.
 
    Deliberately generic -- takes plain strings, knows nothing about games
    or versions -- so it's reusable for any future modal list (e.g. a
@@ -42,7 +49,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
    callers can reuse it later. */
 void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int text_scale,
                              const char *title, const char *const *items, int item_count,
-                             int selected_index);
+                             int selected_index, int min_width_chars, SDL_Color accent_color);
 
 void render_shutdown(RenderContext *rc);
 

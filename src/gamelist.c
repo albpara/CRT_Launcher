@@ -25,11 +25,23 @@ void gamelist_init(GameListState *state, const LaunchboxInfo *lb) {
     state->selected_group = (lb->group_count > 0) ? GAMELIST_SYSTEM_ENTRY_COUNT : 0;
     state->selected_version = -1;
     state->system_modal_open = SDL_FALSE;
+    state->system_modal_status[0] = '\0';
+    state->system_modal_hint[0] = '\0';
+    state->exit_confirm_open = SDL_FALSE;
     state->scroll_offset = state->selected_group;
 }
 
 void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta) {
-    if (delta == 0) {
+    if (delta == 0 || state->system_modal_open || state->exit_confirm_open) {
+        /* A system entry's own modal (e.g. Calibrate Controls) has nothing
+           to navigate -- unlike the version-picker modal below, it's just
+           a status display, not a list. Without this guard, moving
+           selected_group off the system row it's showing corrupts the
+           gamelist_system_entry_labels[] lookup in render.c (a
+           GAMELIST_SYSTEM_ENTRY_COUNT-element array) into an out-of-bounds
+           read -- this is what crashed on a stray Down press. The exit
+           confirmation is guarded the same way for the same class of
+           reason -- nothing underneath it should move while it's up. */
         return;
     }
 
@@ -57,7 +69,8 @@ void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta) {
 }
 
 void gamelist_jump_letter(GameListState *state, const LaunchboxInfo *lb, int direction) {
-    if (lb->group_count <= 0 || gamelist_selected_is_system(state)) {
+    if (lb->group_count <= 0 || gamelist_selected_is_system(state) ||
+        state->system_modal_open || state->exit_confirm_open) {
         return;
     }
 
@@ -98,7 +111,8 @@ void gamelist_jump_letter(GameListState *state, const LaunchboxInfo *lb, int dir
 }
 
 void gamelist_toggle_expand(GameListState *state, const LaunchboxInfo *lb) {
-    if (lb->group_count <= 0 || gamelist_selected_is_system(state)) {
+    if (lb->group_count <= 0 || gamelist_selected_is_system(state) ||
+        state->system_modal_open || state->exit_confirm_open) {
         return;
     }
 
