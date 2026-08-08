@@ -7,15 +7,22 @@
 #include "launchbox.h"
 
 /* Always-present rows pinned above the platform/game list -- a small,
-   growable system menu (currently just a calibration placeholder; more
-   settings-style entries are expected to join it later). They live in the
-   same flat, scrollable row space as the platform toggle rows and
-   LaunchboxGameGroup rows (system rows first, then platforms, then
-   favorites, then the rest -- see selected_group below), not a separate
-   screen, so scrolling up from the first favorite/game reveals them like
-   any other row. */
-#define GAMELIST_SYSTEM_ENTRY_COUNT 1
+   growable system menu. They live in the same flat, scrollable row space
+   as the platform toggle rows and LaunchboxGameGroup rows (system rows
+   first, then platforms, then favorites, then the rest -- see
+   selected_group below), not a separate screen, so scrolling up from the
+   first favorite/game reveals them like any other row. */
+#define GAMELIST_SYSTEM_ENTRY_COUNT 2
 extern const char *const gamelist_system_entry_labels[GAMELIST_SYSTEM_ENTRY_COUNT];
+
+/* Index (within the system-entry range, i.e. also a valid selected_group
+   value) of the "add/remove from Windows startup" row. Unlike every other
+   system/platform row, its on-screen text isn't gamelist_system_entry_labels[
+   this] verbatim -- render.c overrides it every frame with live registry
+   state from startup_is_enabled() (see startup.h), and main.c dispatches
+   SELECT on this row straight to startup_enable()/startup_disable()
+   instead of opening a modal like GAMELIST_SYSTEM_ENTRY_CALIBRATE does. */
+#define GAMELIST_SYSTEM_ENTRY_STARTUP 1
 
 /*
  * Pure navigation state for the on-screen game list. No rendering and no

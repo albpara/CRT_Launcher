@@ -9,6 +9,7 @@
 #include "launchbox.h"
 #include "launcher.h"
 #include "render.h"
+#include "startup.h"
 
 #define CONFIG_PATH "config.ini"
 
@@ -474,16 +475,29 @@ int main(int argc, char *argv[]) {
                    pressed alone. */
                 if (select_pressed) {
                     if (gamelist_selected_is_system(&gamelist)) {
-                        SDL_Log("[main] Starting calibration");
-                        calibrating = SDL_TRUE;
-                        calibrate_step = 0;
-                        axis_needs_release = SDL_FALSE;
-                        memset(calibrate_bindings, 0, sizeof(calibrate_bindings));
-                        gamelist.system_modal_open = SDL_TRUE;
-                        snprintf(gamelist.system_modal_status, sizeof(gamelist.system_modal_status),
-                                 "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[0]);
-                        snprintf(gamelist.system_modal_hint, sizeof(gamelist.system_modal_hint),
-                                 "ESC WILL EXIT CALIBRATION");
+                        if (gamelist.selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
+                            /* Immediate toggle, no modal -- matches the
+                               platform checkboxes below, not the
+                               calibration flow. Nothing to persist to
+                               config.ini either; the registry itself is
+                               the only source of truth (see startup.h). */
+                            if (startup_is_enabled()) {
+                                startup_disable();
+                            } else {
+                                startup_enable();
+                            }
+                        } else {
+                            SDL_Log("[main] Starting calibration");
+                            calibrating = SDL_TRUE;
+                            calibrate_step = 0;
+                            axis_needs_release = SDL_FALSE;
+                            memset(calibrate_bindings, 0, sizeof(calibrate_bindings));
+                            gamelist.system_modal_open = SDL_TRUE;
+                            snprintf(gamelist.system_modal_status, sizeof(gamelist.system_modal_status),
+                                     "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[0]);
+                            snprintf(gamelist.system_modal_hint, sizeof(gamelist.system_modal_hint),
+                                     "ESC WILL EXIT CALIBRATION");
+                        }
                     } else if (gamelist_selected_is_platform(&gamelist, &launchbox)) {
                         int idx = gamelist_selected_platform_index(&gamelist);
                         gamelist_toggle_platform(&gamelist, &launchbox, idx);

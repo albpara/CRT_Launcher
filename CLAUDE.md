@@ -83,8 +83,11 @@ overall spec beyond what's in the code and README right now.
   `<Favorite>` field), each block alphabetical.
 - `gamelist.c/h` — pure navigation state; no rendering, no launching lives
   here. Owns the small "system menu" concept (`GAMELIST_SYSTEM_ENTRY_COUNT`,
-  currently just CALIBRATE CONTROLS) and, right below it in the same
-  unified row space, one checkbox-style toggle row per platform LaunchBox
+  currently CALIBRATE CONTROLS and an ADD/REMOVE FROM STARTUP row --
+  render.c overrides the latter's text every frame from `startup.h`'s live
+  registry state rather than using a static label) and, right below it in
+  the same unified row space, one checkbox-style toggle row per platform
+  LaunchBox
   reported (`LaunchboxInfo.platform_names`) — both pinned above
   favorites/games, hidden by default (initial scroll position starts past
   them), revealed by scrolling up past the top of the real list. Unchecking
@@ -100,6 +103,24 @@ overall spec beyond what's in the code and README right now.
   folder.
 - `xml_util.c/h` — the substring-XML helpers shared by `launchbox.c` and
   `launcher.c`.
+- `startup.c/h` — whether CRT Launcher runs at Windows sign-in, via a
+  single `"CRT Launcher"` value under the current user's
+  `HKCU\...\Run` key (per-user, no admin rights, no `.lnk`/COM). No
+  config.ini involvement at all -- the registry is the only source of
+  truth, queried fresh (`startup_is_enabled()`) every frame the
+  ADD/REMOVE FROM STARTUP system-menu row is on screen, so it can't drift
+  from a change made outside the app (Task Manager's Startup tab,
+  msconfig). `startup_enable()` writes the exe's own live path
+  (`GetModuleFileNameA`), so toggling off and back on after a move
+  self-corrects.
+- `assets/icon.ico` + `assets/app.rc.in` — the exe's icon (16-256px, all
+  32bpp). `app.rc.in` is a resource-script template; CMake's
+  `configure_file()` bakes in an absolute path to `icon.ico` (via
+  `enable_language(RC)` + `target_sources`) so windres never has to guess
+  a working directory to resolve a relative one against. Applies to both
+  `build/` and `build-noconsole/` automatically, since it's wired into the
+  shared `add_executable(crt_launcher ...)` target in `CMakeLists.txt`,
+  not a separate step.
 
 ## Established conventions
 

@@ -4,6 +4,10 @@ project(crt_launcher C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+if (WIN32)
+    enable_language(RC)
+endif()
+
 # OFF (default): a normal console-subsystem exe -- the terminal that opens
 # alongside it is where SDL_Log's output goes, handy while developing.
 # ON: a WINDOWS-subsystem exe -- Windows never creates a console for it at
@@ -23,13 +27,36 @@ add_executable(crt_launcher
     src/gamelist.c
     src/xml_util.c
     src/launcher.c
+    src/startup.c
 )
 
 if (CRT_LAUNCHER_NO_CONSOLE)
     set_target_properties(crt_launcher PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
+# App icon (assets/icon.ico), embedded via a generated .rc resource script.
+# configure_file() bakes in an absolute path to the .ico so windres/rc.exe
+# never has to resolve a relative one against whatever directory it's
+# invoked from.
+if (WIN32)
+    set(CRT_LAUNCHER_ICON_PATH "${CMAKE_SOURCE_DIR}/assets/icon.ico")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/assets/app.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/app.rc"
+        @ONLY
+    )
+    target_sources(crt_launcher PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
+endif()
+
 target_include_directories(crt_launcher PRIVATE src)
+
+if (WIN32)
+    # Reg* functions (startup.c's Windows-startup registry toggle) live in
+    # advapi32 -- not linked by default under every generator/toolchain
+    # (MSVC in particular needs it explicit), so name it rather than rely
+    # on MinGW's default library set happening to include it.
+    target_link_libraries(crt_launcher PRIVATE advapi32)
+endif()
 
 # Prefer the CMake-config SDL2 package (this is what vcpkg installs).
 find_package(SDL2 CONFIG QUIET)

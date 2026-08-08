@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "font_data.h"
+#include "startup.h"
 
 /* Text is sized relative to the configured low-res mode: at that exact
    resolution the scale is 1 (the smallest integer scale that still renders
@@ -210,7 +211,14 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
     while (rows_drawn < visible_rows && g < total_rows) {
         if (g < platform_start) {
             SDL_bool selected = (g == gl->selected_group);
-            draw_row(renderer, gamelist_system_entry_labels[g], text_margin, 0, win_w, y, line_h,
+            const char *label = gamelist_system_entry_labels[g];
+            char startup_label[32];
+            if (g == GAMELIST_SYSTEM_ENTRY_STARTUP) {
+                snprintf(startup_label, sizeof(startup_label),
+                         startup_is_enabled() ? "REMOVE FROM STARTUP" : "ADD TO STARTUP");
+                label = startup_label;
+            }
+            draw_row(renderer, label, text_margin, 0, win_w, y, line_h,
                      text_scale, selected, COLOR_SYSTEM);
             y += line_h;
             rows_drawn++;

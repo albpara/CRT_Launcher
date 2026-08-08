@@ -1,0 +1,6 @@
+// Generated from app.rc.in by CMake's configure_file() -- @CRT_LAUNCHER_ICON_PATH@
+// is substituted with an absolute path so windres/rc.exe never has to guess
+// a working directory to resolve "icon.ico" relative to. IDI_ICON1 is the
+// lowest/first icon resource in the exe, which is what Explorer/the taskbar
+// pick as the file's own icon.
+IDI_ICON1 ICON "@CRT_LAUNCHER_ICON_PATH@"

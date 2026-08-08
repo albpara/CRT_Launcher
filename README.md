@@ -42,6 +42,10 @@ src/
                              platform filter, game rows) -- no rendering, no launching
   xml_util.h / xml_util.c    Tiny shared substring-based XML field extraction, used by launchbox.c and launcher.c
   launcher.h / launcher.c    Parses Data\Emulators.xml and spawns the resolved emulator + ROM via CreateProcess
+  startup.h / startup.c      Windows-startup registration via the HKCU Run registry key (not config.ini)
+assets/
+  icon.ico               App icon (16/32/48/64/128/256px), embedded into the exe via app.rc.in
+  app.rc.in              Resource script template -- CMake fills in an absolute path to icon.ico
 ```
 
 ## Building (Windows)
@@ -165,8 +169,15 @@ the fallback's keyboard names for brevity; on a calibrated cabinet, read
   group, and both repeat while held.
   - Scrolling up past the top of the list reveals a hidden-by-default
     section: **CALIBRATE CONTROLS** (re-run it any time to recalibrate --
-    it overwrites the whole `[bindings]` section), then one checkbox-style
-    row per platform LaunchBox reported (`X ` prefix = checked). **SELECT**
+    it overwrites the whole `[bindings]` section), then **ADD TO
+    STARTUP**/**REMOVE FROM STARTUP** (the label itself reflects live
+    state -- **SELECT** toggles whether Windows launches CRT Launcher at
+    sign-in, via a `"CRT Launcher"` value under the current user's
+    `HKCU\...\Run` registry key; this is deliberately *not* stored in
+    `config.ini` at all -- the registry is the only source of truth, so it
+    stays in sync even if toggled from outside the app, e.g. Task
+    Manager's Startup tab), then one checkbox-style row per platform
+    LaunchBox reported (`X ` prefix = checked). **SELECT**
     on a platform row toggles it on/off and immediately hides/shows that
     platform's games in the list below -- the choice is saved to
     `config.ini`'s `selected_platforms` automatically, so it's still in

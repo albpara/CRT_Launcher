@@ -7,6 +7,9 @@
 
 const char *const gamelist_system_entry_labels[GAMELIST_SYSTEM_ENTRY_COUNT] = {
     "CALIBRATE CONTROLS",
+    "ADD TO STARTUP", /* fallback text only -- render.c always overrides this
+                          particular index with live registry state, see
+                          GAMELIST_SYSTEM_ENTRY_STARTUP's doc comment */
 };
 
 static char first_letter(const char *title) {
