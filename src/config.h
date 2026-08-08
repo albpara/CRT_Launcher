@@ -8,6 +8,10 @@
    value -- config_load() fills in defaults for anything missing, unparsable,
    or if the file can't be opened at all. */
 #define CONFIG_LAUNCHBOX_DIR_MAX 512
+/* Room for a comma-separated list of every platform LaunchBox might have
+   (each up to LAUNCHBOX_PLATFORM_MAX in launchbox.h) -- generous, matching
+   this app's "config.ini is a few KB at most" assumption elsewhere. */
+#define CONFIG_SELECTED_PLATFORMS_MAX 2048
 
 /* One physical input a bindable action can be tied to. Deliberately
    source-agnostic (keyboard OR joystick) -- main.c resolves whichever one
@@ -97,6 +101,15 @@ typedef struct {
        "Cabinet\LaunchBox\") before giving up -- still empty here only if
        neither an explicit setting nor that fallback found one. */
     char launchbox_dir[CONFIG_LAUNCHBOX_DIR_MAX];
+    /* Raw value of config.ini's [launchbox] selected_platforms key --
+       "All" (default), "None", or a comma-separated list of platform
+       names (e.g. "Arcade,SNES"), matched case-insensitively against
+       whatever LaunchboxInfo.platform_names the scan actually found.
+       Kept as unparsed text here since config_load runs before
+       launchbox_load and has no platform list yet to validate against --
+       see gamelist_init/gamelist_toggle_platform in gamelist.c for where
+       this actually gets resolved and re-persisted. */
+    char selected_platforms[CONFIG_SELECTED_PLATFORMS_MAX];
 } AppConfig;
 
 /* Reads `path` (INI format) into `out`. Logs what was loaded, what was
@@ -112,5 +125,16 @@ void config_load(const char *path, AppConfig *out);
    file couldn't be written. Called once, after a full calibration pass
    completes -- see main.c. */
 SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPUT_ACTION_COUNT]);
+
+/* Rewrites just the [launchbox] section's `selected_platforms=` line in
+   `path` to `value` (as produced by gamelist_format_platform_selection:
+   "All", "None", or a comma-separated platform name list), leaving
+   everything else in the file untouched. Appends the line right after the
+   [launchbox] header if it isn't present yet, or appends a whole new
+   [launchbox] section if even that header is missing. Same in-memory
+   rewrite approach as config_save_bindings, for the same CRLF-safety
+   reason -- see its comment. Called every time a platform's toggled in
+   the system menu's platform list, so the choice survives a restart. */
+SDL_bool config_save_selected_platforms(const char *path, const char *value);
 
 #endif /* CRT_CONFIG_H */

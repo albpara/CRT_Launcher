@@ -1,24 +1,29 @@
 # CRT Launcher POC
 
-Minimal SDL2 proof-of-concept for an arcade-cabinet frontend. This step
-proves out, before any real launcher UI gets built:
+Minimal SDL2 proof-of-concept for an arcade-cabinet frontend, growing
+feature-by-feature toward eventually replacing LaunchBox/BigBox. This step
+proves out, before any polished launcher UI gets built:
 
 1. Switching to a CRT Emudriver low-resolution display mode (and back to the
    desktop) without stretching or scaling.
 2. Pixel-perfect, nearest-neighbor rendering (no filtering blur) at that
    resolution.
-3. Reading real titles out of a LaunchBox database, navigating them with
-   the keyboard, and actually launching the right emulator with the right
-   ROM. Games that LaunchBox tracks as multiple versions/clones (e.g.
-   several regional or hardware variants of the same arcade board) collapse
-   into one row that opens a small modal to pick a specific version.
+3. Reading real titles out of a LaunchBox database, navigating them (with a
+   keyboard or a calibrated joystick/controller), and actually launching
+   the right emulator with the right ROM. Games that LaunchBox tracks as
+   multiple versions/clones (e.g. several regional or hardware variants of
+   the same arcade board) collapse into one row that opens a small modal
+   to pick a specific version.
+4. Favorites (highlighted, sorted first), a per-platform show/hide filter,
+   and in-app controller calibration (keyboard, buttons, hats, and analog
+   axes) so the cabinet doesn't need a keyboard plugged in day-to-day.
 
-Pressing Enter resolves the selected game's emulator from
-`Data\Emulators.xml` and spawns it for real (see "Known placeholder: game
-launching" below for exactly what that does and doesn't handle -- it
-covers the MAME-style command-line pattern this POC was built and tested
-against, not every emulator LaunchBox supports). A real game-list UI (fast
-filtering, platform tabs, art) is still out of scope.
+SELECT resolves the selected game's emulator from `Data\Emulators.xml` and
+spawns it for real (see "Known placeholder: game launching" below for
+exactly what that does and doesn't handle -- it covers the MAME-style
+command-line pattern this POC was built and tested against, not every
+emulator LaunchBox supports). There's still no fast text search, thumbnails,
+or box art -- see "Known placeholder: the game list UI" below.
 
 ## Project layout
 
@@ -27,12 +32,14 @@ CMakeLists.txt        Build configuration
 config.ini             Default runtime config (edit this, no rebuild needed)
 src/
   main.c               Entry point / event loop, wires the modules together
-  config.h / config.c   Hand-rolled INI loader -> AppConfig
+  config.h / config.c   Hand-rolled INI loader -> AppConfig, plus input-binding
+                         parsing/persistence (calibration, platform filter)
   display.h / display.c Window + display-mode switching (the core of this POC)
-  render.h / render.c   SDL_Renderer setup, checkerboard grid, status text
+  render.h / render.c   SDL_Renderer setup, checkerboard grid, game list, modals
   font_data.h            Placeholder 5x5 bitmap font glyph table
   launchbox.h / launchbox.c  Minimal LaunchBox Platform XML scan -> list of game titles/versions
-  gamelist.h / gamelist.c    Selection/scroll state for the on-screen list (no rendering, no launching)
+  gamelist.h / gamelist.c    Selection/scroll state for the on-screen list (system menu,
+                             platform filter, game rows) -- no rendering, no launching
   xml_util.h / xml_util.c    Tiny shared substring-based XML field extraction, used by launchbox.c and launcher.c
   launcher.h / launcher.c    Parses Data\Emulators.xml and spawns the resolved emulator + ROM via CreateProcess
 ```
@@ -126,32 +133,73 @@ request, what actually got applied, and any fallback is logged there.
   applied as real exclusive fullscreen, logged as
   `[display] APPLIED: exclusive fullscreen low-res mode ...`.
 - Press the configured hotkey (default **F5**) to toggle to the desktop's
-  native resolution (fullscreen-desktop / borderless) and back.
-- If `launchbox_dir` is configured (see below), the game list (sorted
-  alphabetically, case-insensitive) is navigable: **Up/Down** move the
-  highlighted selection one row at a time, **Left/Right** jump to the start
-  of the previous/next letter group, and both repeat while held.
+  native resolution (fullscreen-desktop / borderless) and back. This one's
+  a literal key, not a calibratable action -- see `toggle_hotkey` below.
+
+### Controls
+
+Everything else is driven by four logical actions -- **UP/DOWN/LEFT/RIGHT**,
+**SELECT**, **BACK**, and **MODIFIER** -- resolved each frame against
+whatever's bound in `config.ini`'s `[bindings]` section (keyboard key,
+joystick button, hat direction, or analog axis push), *plus* a hardcoded
+keyboard fallback (arrows, Enter, Escape, Left/Right Shift) that's always
+live underneath, regardless of what's calibrated -- so a keyboard plugged
+into the cabinet always works as an escape hatch. The examples below use
+the fallback's keyboard names for brevity; on a calibrated cabinet, read
+"Enter" as "whatever SELECT is bound to", etc.
+
+- **On an install with no `[bindings]` section yet** (a fresh `config.ini`,
+  or one that's never been calibrated), the app drops straight into
+  **CALIBRATE CONTROLS** on launch instead of the game list -- there's no
+  reliable way to navigate to it otherwise. Press whatever you want bound
+  to each action in turn (a key, a controller button, a hat direction, or
+  push a stick past its deadzone for an axis binding); **Escape** cancels
+  calibration at any point without saving. Once all seven actions are
+  captured, the result is written to `config.ini`'s `[bindings]` section
+  and a confirmation message tells you where to find CALIBRATE CONTROLS
+  again (any key/press dismisses it).
+- Once calibrated (or on the fallback), the game list (sorted
+  alphabetically, case-insensitive, favorites highlighted and sorted
+  first) is navigable: **Up/Down** move the highlighted selection one row
+  at a time, **Left/Right** jump to the start of the previous/next letter
+  group, and both repeat while held.
+  - Scrolling up past the top of the list reveals a hidden-by-default
+    section: **CALIBRATE CONTROLS** (re-run it any time to recalibrate --
+    it overwrites the whole `[bindings]` section), then one checkbox-style
+    row per platform LaunchBox reported (`X ` prefix = checked). **SELECT**
+    on a platform row toggles it on/off and immediately hides/shows that
+    platform's games in the list below -- the choice is saved to
+    `config.ini`'s `selected_platforms` automatically, so it's still in
+    effect next launch. If every platform ends up unchecked (or there's no
+    LaunchBox data at all), the list shows a plain `NO GAMES` line instead
+    of looking broken/empty.
   - A row showing `(N)>` after the title has N versions grouped together
     (see "Known placeholder: the LaunchBox scan" below for how they're
-    grouped); plain titles have no suffix at all. **Shift+Enter** opens a
-    small modal over the (dimmed) list showing just that game's versions --
-    **Up/Down** move within it, wrapping at the ends without touching the
-    list underneath, and **Shift+Enter** again (or **Esc**) closes it back
-    to the list.
-  - **Enter** actually launches: it resolves the selected version's
+    grouped); plain titles have no suffix at all. **MODIFIER+SELECT** opens
+    a small modal over the (dimmed) list showing just that game's versions
+    -- **Up/Down** move within it, wrapping at the ends without touching
+    the list underneath, and **MODIFIER+SELECT** again (or **BACK**) closes
+    it back to the list.
+  - **SELECT** actually launches: it resolves the selected version's
     emulator (its own, or the platform's default) from `Data\Emulators.xml`
     and spawns it with the ROM. On a still-closed multi-version row it
     launches that game's *default* version (its own primary `<Game>` entry,
-    not a guess) rather than an arbitrary clone -- Shift+Enter first if you
-    want a specific one; inside the open modal, Enter launches whichever
-    version is highlighted. Every resolved command line and working
-    directory is logged before spawning, and a failed resolve or
+    not a guess) rather than an arbitrary clone -- MODIFIER+SELECT first if
+    you want a specific one; inside the open modal, SELECT launches
+    whichever version is highlighted. Every resolved command line and
+    working directory is logged before spawning, and a failed resolve or
     `CreateProcess` logs a warning instead of crashing.
-- Press **Esc** to close the version-picker modal if one is open, or quit
-  otherwise; closing the window also quits.
+- **BACK** closes the version-picker modal if one is open. At the top
+  level of the main list, it instead opens an "EXIT" confirmation modal
+  (**SELECT** confirms and quits, **BACK** backs out without quitting) --
+  it's reachable from a controller button that's easy to bump by accident,
+  so it doesn't quit immediately. Closing the window also quits, no
+  confirmation needed there.
 
-The on-screen text always shows the currently active mode and resolution,
-so you can visually confirm state when toggling.
+The on-screen list always shows a `GAME <N> OF <M>` (or `SETTINGS` /
+`PLATFORMS`) counter, right-aligned above the list, reflecting the
+currently *filtered* view -- not the full LaunchBox database if some
+platforms are unchecked.
 
 ## Editing config.ini
 
@@ -168,6 +216,7 @@ nav_repeat_interval_ms=40
 
 [launchbox]
 launchbox_dir=
+selected_platforms=All
 ```
 
 - `width` / `height` / `refresh_rate` describe the low-res mode to request.
@@ -193,7 +242,24 @@ launchbox_dir=
   as a sibling of its own folder (e.g. `Cabinet\LaunchBox` next to
   `Cabinet\CRT Launcher`) before giving up; set it explicitly if your
   install lives somewhere else. If neither finds anything, the screen just
-  shows `LAUNCHBOX: NOT CONFIGURED` instead, and Enter does nothing.
+  shows `LAUNCHBOX: NOT CONFIGURED` instead, and SELECT does nothing.
+- `selected_platforms` controls which platforms' games show up in the list
+  -- `All` (the default) shows every platform, `None` shows nothing, or a
+  comma-separated list of platform names (matching the `*.xml` filenames in
+  `Data\Platforms` minus the extension, e.g. `Arcade,SNES`) shows only
+  those. Normally you don't hand-edit this -- toggling a platform's
+  checkbox row in the app (see above) rewrites it for you.
+- A `[bindings]` section maps each of the seven actions (`up`, `down`,
+  `left`, `right`, `select`, `back`, `modifier`) to `KEYBOARD <key name>`,
+  `JOYBUTTON <index>`, `JOYHAT <hat> <UP|DOWN|LEFT|RIGHT>`, or
+  `JOYAXIS <axis> <POSITIVE|NEGATIVE>`. Its *absence* is what tells the app
+  "never calibrated" and makes it launch straight into CALIBRATE CONTROLS
+  (see "Controls" above); once written by calibration (or hand-edited in
+  that same format), it's used instead of the keyboard-only defaults --
+  though the hardcoded fallback (arrows/Enter/Escape/Shift) stays live
+  underneath regardless, so a keyboard always works as a backup.
+  Recalibrating overwrites the whole section; nothing else in `config.ini`
+  is touched.
 
 Changes take effect on the next launch -- there's no hot-reload.
 
@@ -202,14 +268,17 @@ Changes take effect on the next launch -- there's no hot-reload.
 `launchbox.c` is a substring search, not a real XML parser. For each
 `*.xml` file found directly inside `Data\Platforms` (via `FindFirstFile`/
 `FindNextFile`, Windows-only, no recursion into subfolders) it walks every
-`<Game>...</Game>` block and, within that one block's bounds, reads five
-fields: `<Title>`, `<DatabaseID>`, `<ApplicationPath>` (the ROM path),
-`<ID>`, and `<Emulator>`. It also reads matching `<AdditionalApplication>`
-blocks' `<ApplicationPath>` and `<EmulatorId>` (a different field name for
-the same concept -- LaunchBox itself isn't consistent here). The platform
-name (e.g. `"Arcade"`) is just the XML filename, not a field read from
-inside it. All of that -- ROM path, emulator, platform -- is what
-`launcher.c` needs later to actually start the game, not just display it.
+`<Game>...</Game>` block and, within that one block's bounds, reads
+`<Title>`, `<DatabaseID>`, `<ApplicationPath>` (the ROM path), `<ID>`,
+`<Emulator>`, `<Favorite>`, `<Region>`, and `<Version>` (the last two feed
+its version label the same way an `<AdditionalApplication>`'s do -- see
+below). It also reads matching `<AdditionalApplication>` blocks'
+`<ApplicationPath>`, `<EmulatorId>` (a different field name for the same
+concept -- LaunchBox itself isn't consistent here), `<Region>`, and
+`<Version>`. The platform name (e.g. `"Arcade"`) is just the XML filename,
+not a field read from inside it. All of that -- ROM path, emulator,
+platform -- is what `launcher.c` needs later to actually start the game,
+not just display it.
 
 All the records from every platform file are then sorted case-insensitively
 by title (ROM filename as a tiebreaker), and consecutive entries sharing a
@@ -226,11 +295,11 @@ Two things worth knowing if this looks wrong for some game:
   database checked while building this held that assumption, but it's not
   enforced or validated -- there's no fallback if a same-`DatabaseID` pair
   ever had different titles.
-- **Version labels use LaunchBox's own `Region`/`Version` text** when a
-  version comes from an `<AdditionalApplication>` (e.g. `(World 940223)`),
-  falling back to the ROM filename (e.g. `atetris`) when those fields are
-  empty, or when the version is a `<Game>`'s own primary entry rather than
-  an `<AdditionalApplication>`.
+- **Version labels use LaunchBox's own `Version` text** (e.g.
+  `(World 940223)`), falling back to `Region` (e.g. `North America`), then
+  the ROM filename (e.g. `atetris`) if both are empty -- the same fallback
+  order whether the entry is a `<Game>`'s own primary entry or one of its
+  `<AdditionalApplication>` siblings.
 
 Sorting is by raw title text, not LaunchBox's own `SortTitle` field (which
 strips leading articles like "The"; this scanner never reads it). Reads
@@ -293,20 +362,27 @@ fixed 128-entry stack array (comfortably above any real game's version
 count -- the largest observed while building this was 9) before calling
 it.
 
-There's still no paging, no text search, no thumbnails/box art, and no
-grouping by platform -- with a real database that's several thousand
-unique titles, so even with letter-jump, getting to one specific title
-can take some hunting. That's expected for this step; a real game-list UI
-(fast filtering, platform tabs, art) is future work.
+Platforms can be shown/hidden entirely (see the checkbox rows in
+"Controls" above), but there's still no *grouping* by platform within the
+list itself -- visible games from every checked platform interleave in one
+alphabetical run, not separate sections/tabs. There's also still no
+paging, no text search, and no thumbnails/box art -- with a real database
+that's several thousand unique titles, so even with letter-jump and
+platform filtering, getting to one specific title can take some hunting.
+That's expected for this step; a more polished game-list UI (fast text
+search, art) is future work.
 
 ## Known placeholder: the font
 
 `font_data.h` is a hand-authored 5x5-pixel block font covering just
-`A-Z 0-9 space - : . ( ) >`, drawn as filled rectangles rather than sampled
-from a texture. `>` is reused as a disclosure-arrow icon (see the game
-list above), not literal punctuation. That's intentional for this POC — it's crisp by
-construction and needed no font asset or download. It is **not** the final
-font pipeline: replace it with a real BMFont-style bitmap font (image +
-glyph descriptor), e.g. a licensed pixel font like "Press Start 2P"
-(SIL Open Font License) exported as a sprite sheet, once the actual
-game-list UI work starts.
+`A-Z 0-9 space - : . ( ) > '`, drawn as filled rectangles rather than
+sampled from a texture. `>` is reused as a disclosure-arrow icon (see the
+game list above), not literal punctuation. Any other character (accents,
+CJK text, punctuation like `/` or `?`) renders as a small diamond rather
+than blank space -- deliberate, so unsupported text is visibly *wrong*
+instead of silently looking like empty/missing data. That's intentional
+for this POC — it's crisp by construction and needed no font asset or
+download. It is **not** the final font pipeline: replace it with a real
+BMFont-style bitmap font (image + glyph descriptor), e.g. a licensed pixel
+font like "Press Start 2P" (SIL Open Font License) exported as a sprite
+sheet, once the actual game-list UI work starts.

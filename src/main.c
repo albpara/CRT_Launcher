@@ -262,7 +262,7 @@ int main(int argc, char *argv[]) {
     launcher_load(cfg.launchbox_dir, &launcher);
 
     GameListState gamelist;
-    gamelist_init(&gamelist, &launchbox);
+    gamelist_init(&gamelist, &launchbox, cfg.selected_platforms);
 
     DisplayContext display;
     if (!display_init(&cfg, &display)) {
@@ -484,31 +484,41 @@ int main(int argc, char *argv[]) {
                                  "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[0]);
                         snprintf(gamelist.system_modal_hint, sizeof(gamelist.system_modal_hint),
                                  "ESC WILL EXIT CALIBRATION");
-                    } else if (launchbox.group_count > 0) {
-                        if (modifier_held) {
-                            gamelist_toggle_expand(&gamelist, &launchbox);
-                        } else {
-                            const LaunchboxGameGroup *grp =
-                                &launchbox.groups[gamelist.selected_group - GAMELIST_SYSTEM_ENTRY_COUNT];
+                    } else if (gamelist_selected_is_platform(&gamelist, &launchbox)) {
+                        int idx = gamelist_selected_platform_index(&gamelist);
+                        gamelist_toggle_platform(&gamelist, &launchbox, idx);
 
-                            /* Modal closed (selected_version == -1): launch the default
-                               version -- versions[version_start] is always the game's own
-                               primary <Game> entry, guaranteed by compare_raw_games's
-                               primary-first sort tier, not just whichever version happens
-                               to sort first alphabetically. Modal open: launch whichever
-                               version is focused in it. */
-                            int version_index = (gamelist.selected_version >= 0) ? gamelist.selected_version : 0;
-                            const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
+                        char csv[CONFIG_SELECTED_PLATFORMS_MAX];
+                        gamelist_format_platform_selection(&gamelist, &launchbox, csv, sizeof(csv));
+                        config_save_selected_platforms(CONFIG_PATH, csv);
 
-                            if (grp->version_count > 1 && gamelist.selected_version < 0) {
-                                SDL_Log("[main] Launching default version of '%s' (MODIFIER+SELECT to pick another)",
-                                        grp->title);
+                        SDL_Log("[main] Platform '%s' %s", launchbox.platform_names[idx],
+                                (gamelist.platform_selected && gamelist.platform_selected[idx]) ? "enabled" : "disabled");
+                    } else {
+                        const LaunchboxGameGroup *grp = gamelist_selected_group(&gamelist, &launchbox);
+                        if (grp) {
+                            if (modifier_held) {
+                                gamelist_toggle_expand(&gamelist, &launchbox);
                             } else {
-                                SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
-                            }
+                                /* Modal closed (selected_version == -1): launch the default
+                                   version -- versions[version_start] is always the game's own
+                                   primary <Game> entry, guaranteed by compare_raw_games's
+                                   primary-first sort tier, not just whichever version happens
+                                   to sort first alphabetically. Modal open: launch whichever
+                                   version is focused in it. */
+                                int version_index = (gamelist.selected_version >= 0) ? gamelist.selected_version : 0;
+                                const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
 
-                            if (!launcher_launch(&launcher, ver)) {
-                                SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
+                                if (grp->version_count > 1 && gamelist.selected_version < 0) {
+                                    SDL_Log("[main] Launching default version of '%s' (MODIFIER+SELECT to pick another)",
+                                            grp->title);
+                                } else {
+                                    SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
+                                }
+
+                                if (!launcher_launch(&launcher, ver)) {
+                                    SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
+                                }
                             }
                         }
                     }
@@ -539,6 +549,7 @@ int main(int argc, char *argv[]) {
     }
     render_shutdown(&render);
     display_shutdown(&display);
+    gamelist_free(&gamelist);
     launchbox_free(&launchbox);
     launcher_free(&launcher);
     SDL_Quit();

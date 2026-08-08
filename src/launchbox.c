@@ -66,6 +66,18 @@ typedef struct {
     int capacity;
 } RawGameArray;
 
+/* One platform name, sized to match LaunchboxInfo.platform_names. */
+typedef char PlatformName[LAUNCHBOX_PLATFORM_MAX];
+
+/* Grows as distinct platform XML files are scanned -- becomes
+   LaunchboxInfo.platform_names/platform_count wholesale once the scan
+   finishes (see scan_platforms_dir). */
+typedef struct {
+    PlatformName *items;
+    int count;
+    int capacity;
+} PlatformNameArray;
+
 /* One <Game>'s <ID> -> (title, DatabaseID, Emulator), built while scanning
    <Game> blocks in a file and used to resolve which game each
    <AdditionalApplication> in that same file belongs to (they link back via
@@ -101,6 +113,27 @@ static RawGame *raw_game_array_push(RawGameArray *arr) {
 
     RawGame *slot = &arr->items[arr->count];
     memset(slot, 0, sizeof(*slot));
+    arr->count++;
+    return slot;
+}
+
+/* Same push-and-grow pattern as raw_game_array_push, for the list of
+   distinct platform names encountered during a scan. Starts small (16) --
+   unlike games, real installs only ever have a handful to a few dozen
+   platform XML files, nowhere near needing RawGameArray's larger initial
+   capacity. */
+static PlatformName *platform_name_array_push(PlatformNameArray *arr) {
+    if (arr->count >= arr->capacity) {
+        int new_capacity = (arr->capacity == 0) ? 16 : arr->capacity * 2;
+        PlatformName *grown = (PlatformName *)realloc(arr->items, (size_t)new_capacity * sizeof(PlatformName));
+        if (!grown) {
+            return NULL;
+        }
+        arr->items = grown;
+        arr->capacity = new_capacity;
+    }
+
+    PlatformName *slot = &arr->items[arr->count];
     arr->count++;
     return slot;
 }
@@ -562,7 +595,7 @@ static void scan_platforms_dir(const char *platforms_dir, LaunchboxInfo *out) {
     }
 
     RawGameArray raw = {0};
-    int platform_count = 0;
+    PlatformNameArray platform_names = {0};
 
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -577,6 +610,11 @@ static void scan_platforms_dir(const char *platforms_dir, LaunchboxInfo *out) {
 
         char platform[LAUNCHBOX_PLATFORM_MAX];
         platform_name_from_filename(fd.cFileName, platform, sizeof(platform));
+
+        PlatformName *name_slot = platform_name_array_push(&platform_names);
+        if (name_slot) {
+            snprintf(*name_slot, sizeof(*name_slot), "%s", platform);
+        }
 
         long len = 0;
         char *data = xml_read_entire_file(file_path, &len);
@@ -598,7 +636,6 @@ static void scan_platforms_dir(const char *platforms_dir, LaunchboxInfo *out) {
 
         free(data);
 
-        platform_count++;
         SDL_Log("[launchbox] Scanned '%s': %d game(s), %d additional version(s)",
                 file_path, games_found, versions_found);
     } while (FindNextFileA(find, &fd));
@@ -612,8 +649,9 @@ static void scan_platforms_dir(const char *platforms_dir, LaunchboxInfo *out) {
     }
     free(raw.items);
 
-    out->platform_count = platform_count;
-    out->status = (platform_count > 0) ? LAUNCHBOX_STATUS_LOADED : LAUNCHBOX_STATUS_NO_PLATFORMS;
+    out->platform_names = platform_names.items;
+    out->platform_count = platform_names.count;
+    out->status = (out->platform_count > 0) ? LAUNCHBOX_STATUS_LOADED : LAUNCHBOX_STATUS_NO_PLATFORMS;
 }
 #endif /* _WIN32 */
 
@@ -669,8 +707,11 @@ void launchbox_load(const char *launchbox_dir, LaunchboxInfo *out) {
 void launchbox_free(LaunchboxInfo *info) {
     free(info->groups);
     free(info->versions);
+    free(info->platform_names);
     info->groups = NULL;
     info->versions = NULL;
+    info->platform_names = NULL;
     info->group_count = 0;
     info->version_count = 0;
+    info->platform_count = 0;
 }

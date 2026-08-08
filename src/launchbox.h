@@ -52,7 +52,14 @@ typedef struct {
 
 typedef struct {
     LaunchboxStatus status;
-    int platform_count;             /* number of *.xml files scanned in Data\Platforms */
+    int platform_count;             /* number of *.xml files scanned in Data\Platforms --
+                                        also the length of platform_names below */
+
+    /* One entry per distinct platform XML scanned (e.g. "Arcade", "SNES"),
+       heap-allocated, in scan order (not sorted). What gamelist.c's
+       platform-filter checkboxes list and match a LaunchboxGameGroup's
+       platform against -- see gamelist_recompute_visible_groups. */
+    char (*platform_names)[LAUNCHBOX_PLATFORM_MAX];
 
     /* One entry per unique title, heap-allocated. Ordered favorites-first
        (see favorite_count below), each of those two blocks alphabetical by
@@ -120,8 +127,9 @@ typedef struct {
  */
 void launchbox_load(const char *launchbox_dir, LaunchboxInfo *out);
 
-/* Frees `groups` and `versions`. Safe to call regardless of `status`
-   (including on an info struct that was never successfully loaded). */
+/* Frees `groups`, `versions`, and `platform_names`. Safe to call
+   regardless of `status` (including on an info struct that was never
+   successfully loaded). */
 void launchbox_free(LaunchboxInfo *info);
 
 #endif /* CRT_LAUNCHBOX_H */

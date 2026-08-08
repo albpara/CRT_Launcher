@@ -38,6 +38,7 @@ static const SDL_Color COLOR_GRID_B = {70, 70, 90, 255};
 static const SDL_Color COLOR_TEXT = {80, 255, 120, 255};
 static const SDL_Color COLOR_FAVORITE = {255, 220, 40, 255};
 static const SDL_Color COLOR_SYSTEM = {140, 140, 150, 255};
+static const SDL_Color COLOR_PLATFORM = {90, 170, 255, 255};
 static const SDL_Color COLOR_EXIT = {255, 70, 70, 255};
 static const SDL_Color COLOR_TEXT_SHADOW = {0, 0, 0, 255};
 static const SDL_Color COLOR_SELECT_TEXT = {10, 10, 15, 255};
@@ -172,25 +173,41 @@ static void draw_row(SDL_Renderer *renderer, const char *text, int text_x, int b
 }
 
 /* Draws the scrollable list starting at `list_y`: the system rows first
-   (gamelist_system_entry_labels, in COLOR_SYSTEM gray -- see gamelist.h for
-   why they're part of this same flat row space instead of a separate
-   screen), then one row per LaunchboxGameGroup, with a "(N)>" suffix when
-   it has multiple versions to pick from (see render_draw_modal_list for
+   (gamelist_system_entry_labels, in COLOR_SYSTEM gray -- see gamelist.h
+   for why they're part of this same flat row space instead of a separate
+   screen), then one checkbox-style row per LaunchboxInfo.platform_names
+   entry in COLOR_PLATFORM ("X " prefix when checked, two spaces when not
+   -- see gamelist_toggle_platform for what checking one does), then one
+   row per *visible* LaunchboxGameGroup (gl->visible_group_indices, not
+   lb->groups directly -- unchecking a platform removes its games from
+   this section without touching lb at all), with a "(N)>" suffix when a
+   game has multiple versions to pick from (see render_draw_modal_list for
    the picker that opens over this). Favorites are drawn in COLOR_FAVORITE,
-   simply sorted ahead of the rest -- no divider between the two. Always
-   flat -- versions never appear inline here anymore. `visible_rows` must
-   already reflect the same layout (see render_frame, which computes it
-   once and feeds it to gamelist_scroll_into_view() before calling this). */
+   simply sorted ahead of the rest -- no divider between the two. If there
+   isn't a single visible group (no LaunchBox data at all, or every
+   platform's unchecked), a final non-selectable "NO GAMES" line fills
+   that section instead of just leaving it blank -- see gl->visible_group_count.
+   Always flat -- versions never appear inline here anymore. `visible_rows`
+   must already reflect the same layout (see render_frame, which computes
+   it once and feeds it to gamelist_scroll_into_view() before calling
+   this). */
 static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, const GameListState *gl,
                             int win_w, int list_y, int line_h, int visible_rows,
                             int text_scale, int text_margin) {
     int y = list_y;
     int rows_drawn = 0;
     int g = gl->scroll_offset;
-    int total_rows = GAMELIST_SYSTEM_ENTRY_COUNT + lb->group_count;
+
+    int platform_start = GAMELIST_SYSTEM_ENTRY_COUNT;
+    int platform_end = GAMELIST_SYSTEM_ENTRY_COUNT + lb->platform_count;
+    int game_start = platform_end;
+    int game_end = game_start + gl->visible_group_count;
+
+    SDL_bool show_no_games_row = (gl->visible_group_count == 0);
+    int total_rows = show_no_games_row ? game_end + 1 : game_end;
 
     while (rows_drawn < visible_rows && g < total_rows) {
-        if (g < GAMELIST_SYSTEM_ENTRY_COUNT) {
+        if (g < platform_start) {
             SDL_bool selected = (g == gl->selected_group);
             draw_row(renderer, gamelist_system_entry_labels[g], text_margin, 0, win_w, y, line_h,
                      text_scale, selected, COLOR_SYSTEM);
@@ -200,18 +217,43 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
             continue;
         }
 
-        const LaunchboxGameGroup *grp = &lb->groups[g - GAMELIST_SYSTEM_ENTRY_COUNT];
-        SDL_bool selected = (g == gl->selected_group);
-        SDL_Color color = grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
+        if (g < platform_end) {
+            int p = g - platform_start;
+            SDL_bool selected = (g == gl->selected_group);
+            SDL_bool checked = gl->platform_selected && gl->platform_selected[p];
 
-        char label[LAUNCHBOX_TITLE_MAX + 16];
-        if (grp->version_count > 1) {
-            snprintf(label, sizeof(label), "%s (%d)>", grp->title, grp->version_count);
-        } else {
-            snprintf(label, sizeof(label), "%s", grp->title);
+            char label[LAUNCHBOX_PLATFORM_MAX + 4];
+            snprintf(label, sizeof(label), "%s%s", checked ? "X " : "  ", lb->platform_names[p]);
+
+            draw_row(renderer, label, text_margin, 0, win_w, y, line_h, text_scale, selected, COLOR_PLATFORM);
+            y += line_h;
+            rows_drawn++;
+            g++;
+            continue;
         }
 
-        draw_row(renderer, label, text_margin, 0, win_w, y, line_h, text_scale, selected, color);
+        if (g < game_end) {
+            const LaunchboxGameGroup *grp = &lb->groups[gl->visible_group_indices[g - game_start]];
+            SDL_bool selected = (g == gl->selected_group);
+            SDL_Color color = grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
+
+            char label[LAUNCHBOX_TITLE_MAX + 16];
+            if (grp->version_count > 1) {
+                snprintf(label, sizeof(label), "%s (%d)>", grp->title, grp->version_count);
+            } else {
+                snprintf(label, sizeof(label), "%s", grp->title);
+            }
+
+            draw_row(renderer, label, text_margin, 0, win_w, y, line_h, text_scale, selected, color);
+            y += line_h;
+            rows_drawn++;
+            g++;
+            continue;
+        }
+
+        /* Only reachable when show_no_games_row and g == game_end -- the
+           synthetic, non-selectable placeholder row. */
+        draw_row(renderer, "NO GAMES", text_margin, 0, win_w, y, line_h, text_scale, SDL_FALSE, COLOR_TEXT);
         y += line_h;
         rows_drawn++;
         g++;
@@ -319,12 +361,18 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
        even with zero LaunchBox games loaded -- calibration shouldn't
        require LaunchBox to be configured first. "OF" instead of a literal
        "/" -- the font has no slash glyph (see font_data.h's supported
-       character set), so a '/' would render as FONT_UNKNOWN's diamond. */
+       character set), so a '/' would render as FONT_UNKNOWN's diamond.
+       Counts against gl->visible_group_count (the filtered view), not
+       lb->group_count, so the index/total stay consistent with what's
+       actually on screen while some platforms are unchecked. */
     if (gamelist_selected_is_system(gl)) {
         snprintf(game_count_line, sizeof(game_count_line), "SETTINGS");
-    } else if (lb->group_count > 0) {
+    } else if (gamelist_selected_is_platform(gl, lb)) {
+        snprintf(game_count_line, sizeof(game_count_line), "PLATFORMS");
+    } else if (gl->visible_group_count > 0) {
+        int game_rows_start = GAMELIST_SYSTEM_ENTRY_COUNT + lb->platform_count;
         snprintf(game_count_line, sizeof(game_count_line), "GAME %d OF %d",
-                 gl->selected_group - GAMELIST_SYSTEM_ENTRY_COUNT + 1, lb->group_count);
+                 gl->selected_group - game_rows_start + 1, gl->visible_group_count);
     } else {
         snprintf(game_count_line, sizeof(game_count_line), "NO GAMES LOADED");
     }
@@ -367,23 +415,23 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     gamelist_scroll_into_view(gl, lb, visible_rows);
     draw_game_list(renderer, lb, gl, dc->width, y, line_h, visible_rows, text_scale, text_margin);
 
-    if (gl->selected_version >= 0) {
-        const LaunchboxGameGroup *grp = &lb->groups[gl->selected_group - GAMELIST_SYSTEM_ENTRY_COUNT];
-        int item_count = grp->version_count;
+    const LaunchboxGameGroup *selected_grp = (gl->selected_version >= 0) ? gamelist_selected_group(gl, lb) : NULL;
+    if (selected_grp) {
+        int item_count = selected_grp->version_count;
         if (item_count > MODAL_MAX_ITEMS) {
             item_count = MODAL_MAX_ITEMS; /* no real game has anywhere near this many versions */
         }
 
         const char *items[MODAL_MAX_ITEMS];
         for (int i = 0; i < item_count; i++) {
-            items[i] = lb->versions[grp->version_start + i].label;
+            items[i] = lb->versions[selected_grp->version_start + i].label;
         }
 
         /* Favorite's version picker highlights yellow, matching the row
            that opened it; any other game's stays the default green. */
-        SDL_Color accent = grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
+        SDL_Color accent = selected_grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
         render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
-                                grp->title, items, item_count, gl->selected_version, 0, accent);
+                                selected_grp->title, items, item_count, gl->selected_version, 0, accent);
     } else if (gl->system_modal_open) {
         /* Body text is whatever main.c put in system_modal_status -- for
            Calibrate Controls that's the current "press input for X" prompt

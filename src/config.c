@@ -212,6 +212,7 @@ void config_load(const char *path, AppConfig *out) {
     out->bindings[INPUT_ACTION_MODIFIER] = make_keyboard_binding(SDLK_LSHIFT);
     out->bindings_calibrated = SDL_FALSE;
     out->launchbox_dir[0] = '\0';
+    snprintf(out->selected_platforms, sizeof(out->selected_platforms), "All");
 
     FILE *f = fopen(path, "r");
     if (!f) {
@@ -283,6 +284,8 @@ void config_load(const char *path, AppConfig *out) {
         } else if (strcmp(section, "launchbox") == 0) {
             if (strcmp(key, "launchbox_dir") == 0) {
                 snprintf(out->launchbox_dir, sizeof(out->launchbox_dir), "%s", value);
+            } else if (strcmp(key, "selected_platforms") == 0) {
+                snprintf(out->selected_platforms, sizeof(out->selected_platforms), "%s", value);
             }
         }
     }
@@ -322,6 +325,7 @@ void config_load(const char *path, AppConfig *out) {
             SDL_GetKeyName(out->toggle_hotkey), out->nav_repeat_delay_ms, out->nav_repeat_interval_ms);
     SDL_Log("[config] LaunchBox dir = %s",
             out->launchbox_dir[0] ? out->launchbox_dir : "(not configured)");
+    SDL_Log("[config] selected_platforms = %s", out->selected_platforms);
 
     for (int a = 0; a < INPUT_ACTION_COUNT; a++) {
         char value[64];
@@ -330,11 +334,12 @@ void config_load(const char *path, AppConfig *out) {
     }
 }
 
-/* SDL_TRUE if `p` (which must point at a '[' inside `data`) is genuinely a
-   section-header start -- i.e. either the very first byte of the file, or
-   immediately preceded by a newline -- rather than a stray '[' inside a
-   value or comment. */
-static SDL_bool is_line_start_bracket(const char *data, const char *p) {
+/* SDL_TRUE if `p` is genuinely the start of a line within `data` -- i.e.
+   either the very first byte of the file, or immediately preceded by a
+   newline -- rather than a substring match sitting in the middle of some
+   other line (a stray "[bindings]" inside a comment, "selected_platforms="
+   as part of a longer key, etc). */
+static SDL_bool is_line_start(const char *data, const char *p) {
     return (p == data || *(p - 1) == '\n') ? SDL_TRUE : SDL_FALSE;
 }
 
@@ -404,7 +409,7 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
         const char *p = data;
         while (*p) {
             const char *tag = strstr(p, "[bindings]");
-            if (!tag || !is_line_start_bracket(data, tag)) {
+            if (!tag || !is_line_start(data, tag)) {
                 size_t n = strlen(p);
                 memcpy(result + result_len, p, n);
                 result_len += n;
@@ -449,5 +454,118 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
     free(data);
     free(result);
     SDL_Log("[config] Saved calibrated bindings to '%s'", path);
+    return SDL_TRUE;
+}
+
+SDL_bool config_save_selected_platforms(const char *path, const char *value) {
+    /* Same binary-mode/in-memory-buffer read as config_save_bindings, for
+       the same CRLF round-trip reason -- see its comment. */
+    char *data = NULL;
+    long len = 0;
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (len > 0) {
+            data = (char *)malloc((size_t)len + 1);
+            if (data) {
+                size_t read = fread(data, 1, (size_t)len, f);
+                data[read] = '\0';
+                len = (long)read;
+            }
+        }
+        fclose(f);
+    }
+
+    char new_line[CONFIG_SELECTED_PLATFORMS_MAX + 32];
+    size_t line_len = (size_t)snprintf(new_line, sizeof(new_line), "selected_platforms=%s\n", value);
+
+    size_t result_cap = (size_t)(len > 0 ? len : 0) + line_len + 64;
+    char *result = (char *)malloc(result_cap);
+    if (!result) {
+        SDL_Log("[config] WARNING: out of memory saving '%s', platform selection not saved", path);
+        free(data);
+        return SDL_FALSE;
+    }
+    size_t result_len = 0;
+
+    /* Find an existing "selected_platforms=" line to replace in place; if
+       there isn't one, find the [launchbox] header to insert right after
+       instead -- only searched for if the key itself wasn't found. */
+    const char *existing_key = NULL;
+    const char *launchbox_header = NULL;
+    if (data) {
+        for (const char *p = data; (p = strstr(p, "selected_platforms=")) != NULL; p++) {
+            if (is_line_start(data, p)) {
+                existing_key = p;
+                break;
+            }
+        }
+        if (!existing_key) {
+            for (const char *p = data; (p = strstr(p, "[launchbox]")) != NULL; p++) {
+                if (is_line_start(data, p)) {
+                    launchbox_header = p;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (existing_key) {
+        size_t prefix_len = (size_t)(existing_key - data);
+        memcpy(result + result_len, data, prefix_len);
+        result_len += prefix_len;
+        memcpy(result + result_len, new_line, line_len);
+        result_len += line_len;
+
+        const char *eol = strchr(existing_key, '\n');
+        const char *rest = eol ? eol + 1 : existing_key + strlen(existing_key);
+        size_t rest_len = strlen(rest);
+        memcpy(result + result_len, rest, rest_len);
+        result_len += rest_len;
+    } else if (launchbox_header) {
+        const char *eol = strchr(launchbox_header, '\n');
+        const char *after_header = eol ? eol + 1 : launchbox_header + strlen(launchbox_header);
+        size_t prefix_len = (size_t)(after_header - data);
+        memcpy(result + result_len, data, prefix_len);
+        result_len += prefix_len;
+        memcpy(result + result_len, new_line, line_len);
+        result_len += line_len;
+
+        size_t rest_len = strlen(after_header);
+        memcpy(result + result_len, after_header, rest_len);
+        result_len += rest_len;
+    } else {
+        /* No existing key and no [launchbox] header either (an unusually
+           stripped-down config.ini) -- carry over whatever was there,
+           then append a fresh section. */
+        if (data) {
+            memcpy(result + result_len, data, (size_t)len);
+            result_len += (size_t)len;
+        }
+        if (result_len > 0 && result[result_len - 1] != '\n') {
+            result[result_len++] = '\n';
+        }
+        static const char header[] = "\n[launchbox]\n";
+        memcpy(result + result_len, header, sizeof(header) - 1);
+        result_len += sizeof(header) - 1;
+        memcpy(result + result_len, new_line, line_len);
+        result_len += line_len;
+    }
+
+    FILE *out = fopen(path, "wb");
+    if (!out) {
+        SDL_Log("[config] WARNING: could not open '%s' for writing, platform selection not saved", path);
+        free(data);
+        free(result);
+        return SDL_FALSE;
+    }
+    fwrite(result, 1, result_len, out);
+    fclose(out);
+
+    free(data);
+    free(result);
+    SDL_Log("[config] Saved selected_platforms=%s to '%s'", value, path);
     return SDL_TRUE;
 }
