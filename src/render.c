@@ -180,9 +180,10 @@ static void draw_row(SDL_Renderer *renderer, const char *text, int text_x, int b
    -- see gamelist_toggle_platform for what checking one does), then one
    row per *visible* LaunchboxGameGroup (gl->visible_group_indices, not
    lb->groups directly -- unchecking a platform removes its games from
-   this section without touching lb at all), with a "(N)>" suffix when a
+   this section without touching lb at all), with a trailing " >" when a
    game has multiple versions to pick from (see render_draw_modal_list for
-   the picker that opens over this). Favorites are drawn in COLOR_FAVORITE,
+   the picker that opens over this) -- just the disclosure arrow, not the
+   version count, per user request. Favorites are drawn in COLOR_FAVORITE,
    simply sorted ahead of the rest -- no divider between the two. If there
    isn't a single visible group (no LaunchBox data at all, or every
    platform's unchecked), a final non-selectable "NO GAMES" line fills
@@ -239,7 +240,7 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
 
             char label[LAUNCHBOX_TITLE_MAX + 16];
             if (grp->version_count > 1) {
-                snprintf(label, sizeof(label), "%s (%d)>", grp->title, grp->version_count);
+                snprintf(label, sizeof(label), "%s >", grp->title);
             } else {
                 snprintf(label, sizeof(label), "%s", grp->title);
             }

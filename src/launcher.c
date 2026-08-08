@@ -273,6 +273,7 @@ static void directory_part(const char *path, char *out, size_t out_cap) {
     out[len] = '\0';
 }
 
+
 /* Replaces the first (and, per every command line observed in real
    LaunchBox data, only) occurrence of "%romlocation%" in `template_str`
    with `replacement`, copying the rest through unchanged. If the
@@ -288,7 +289,64 @@ static void substitute_romlocation(const char *template_str, const char *replace
     snprintf(out, out_cap, "%.*s%s%s", prefix_len, template_str, replacement, pos + (sizeof(PLACEHOLDER) - 1));
 }
 
+/* SDL_TRUE if `path` ends in ".exe" (case-insensitive) -- the sanity check
+   before treating a version with no resolvable emulator as a directly
+   launchable Windows app rather than just failing (see launch_windows_app
+   below). */
+static SDL_bool has_exe_extension(const char *path) {
+    size_t len = strlen(path);
+    if (len < 4) {
+        return SDL_FALSE;
+    }
+    return SDL_strcasecmp(path + len - 4, ".exe") == 0 ? SDL_TRUE : SDL_FALSE;
+}
+
 #ifdef _WIN32
+/* Spawns `ver->rom_path` itself, with no emulator involved and no
+   arguments -- the launch path for LaunchBox's "Windows" platform (and
+   any other platform where a game just isn't set up to run through an
+   emulator): those games' ApplicationPath already points straight at the
+   .exe to run, and LaunchBox itself just launches it directly rather than
+   resolving an Emulators.xml entry, which is exactly why launcher_launch
+   below falls back to this when no emulator can be resolved at all.
+   Unlike every other path this scanner deals with, ApplicationPath for a
+   Windows-platform entry is LaunchBox's own absolute path to begin with
+   (e.g. "D:\Fightcade\Fightcade2.exe", nowhere near launchbox_dir) -- so
+   ver->rom_path is used as-is here, not joined onto launchbox_dir like a
+   relative ROM path would be. Working directory is the exe's own
+   containing folder, matching the emulator-launch path's convention of
+   using the launched process's own folder rather than launchbox_dir. */
+static SDL_bool launch_windows_app(const LaunchboxVersion *ver) {
+    char working_dir[LAUNCHER_PATH_MAX];
+    directory_part(ver->rom_path, working_dir, sizeof(working_dir));
+
+    char full_command_line[LAUNCHER_PATH_MAX + 2];
+    snprintf(full_command_line, sizeof(full_command_line), "\"%s\"", ver->rom_path);
+
+    SDL_Log("[launcher] '%s' has no resolvable emulator but its ApplicationPath ends in .exe -- "
+            "launching it directly as a Windows app", ver->label);
+    SDL_Log("[launcher] Launching: %s", full_command_line);
+    SDL_Log("[launcher] Working directory: %s", working_dir);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    SDL_zero(si);
+    si.cb = sizeof(si);
+    SDL_zero(pi);
+
+    BOOL ok = CreateProcessA(NULL, full_command_line, NULL, NULL, FALSE, 0, NULL, working_dir, &si, &pi);
+
+    if (!ok) {
+        SDL_Log("[launcher] WARNING: CreateProcess failed (error %lu) for '%s'",
+                (unsigned long)GetLastError(), full_command_line);
+        return SDL_FALSE;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return SDL_TRUE;
+}
+
 SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver) {
     if (!db->loaded) {
         SDL_Log("[launcher] WARNING: cannot launch '%s' -- Data\\Emulators.xml was not loaded", ver->label);
@@ -311,6 +369,14 @@ SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver
 
     const LauncherEmulator *emu = emulator_id[0] ? find_emulator(db, emulator_id) : NULL;
     if (!emu) {
+        /* No emulator to run this through at all -- before giving up,
+           check whether it's directly launchable instead (LaunchBox's
+           "Windows" platform, or any other platform with no emulator
+           configured, works this way: ApplicationPath already points at
+           the .exe to run). */
+        if (has_exe_extension(ver->rom_path)) {
+            return launch_windows_app(ver);
+        }
         SDL_Log("[launcher] WARNING: could not resolve an emulator for platform '%s' (game's emulator id: '%s') "
                 "-- is there a Default EmulatorPlatform mapping for this platform in Emulators.xml?",
                 ver->platform, ver->emulator_id[0] ? ver->emulator_id : "(none set)");

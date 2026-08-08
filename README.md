@@ -173,9 +173,11 @@ the fallback's keyboard names for brevity; on a calibrated cabinet, read
     effect next launch. If every platform ends up unchecked (or there's no
     LaunchBox data at all), the list shows a plain `NO GAMES` line instead
     of looking broken/empty.
-  - A row showing `(N)>` after the title has N versions grouped together
-    (see "Known placeholder: the LaunchBox scan" below for how they're
-    grouped); plain titles have no suffix at all. **MODIFIER+SELECT** opens
+  - A row showing `>` after the title has multiple versions grouped
+    together (see "Known placeholder: the LaunchBox scan" below for how
+    they're grouped); plain titles have no suffix at all -- the count
+    itself isn't shown, just that there's a choice to make.
+    **MODIFIER+SELECT** opens
     a small modal over the (dimmed) list showing just that game's versions
     -- **Up/Down** move within it, wrapping at the ends without touching
     the list underneath, and **MODIFIER+SELECT** again (or **BACK**) closes
@@ -327,6 +329,24 @@ platform's `Default` `EmulatorPlatform` entry; the resolved command line
 has `%romlocation%` replaced with the ROM's containing folder, and the ROM
 itself is appended per that emulator's quoting/path rules (`NoQuotes`,
 `FileNameWithoutExtensionAndPath`) before spawning via `CreateProcess`.
+
+**If no emulator can be resolved at all** (no `emulator_id` on the game, and
+no `Default` `EmulatorPlatform` mapping for its platform) **and its
+`ApplicationPath` ends in `.exe`**, it's launched directly instead --
+no command line, no `%romlocation%` substitution, just the exe itself with
+its own containing folder as the working directory. `ApplicationPath` is
+used exactly as LaunchBox stored it here, *not* joined onto
+`launchbox_dir` the way a relative ROM path is -- Windows-platform entries
+store their own absolute path already (e.g. `D:\Fightcade\Fightcade2.exe`,
+nowhere near the LaunchBox install). This is how LaunchBox's
+"Windows" platform works in a real database (`Data\Platforms\Windows.xml`,
+if you have one): those games just don't have an emulator configured at
+all, since LaunchBox itself launches their `ApplicationPath` directly. The
+`.exe` check is a sanity guard, not a platform-name check -- any platform
+with an unresolvable emulator and an exe-pointing `ApplicationPath` gets
+this treatment, not just one literally named "Windows". Anything else
+still just logs a warning and fails, same as before.
+
 This was built against and tested with MAME's actual command-line pattern
 (`-rompath %romlocation%` plus a bare ROM name) -- it should work for any
 emulator using that same %romlocation%-plus-filename convention, but
@@ -340,7 +360,7 @@ check whether the game actually loaded, or handle it exiting.
 ## Known placeholder: the game list UI
 
 `gamelist.c` + `render.c` are a bare but now single-level list: one row
-per unique title (with a `(N)>` suffix when it has multiple versions --
+per unique title (with a trailing `>` when it has multiple versions --
 see above), a solid highlight bar on whichever row is selected,
 scroll-into-view so the highlight never runs off screen, and Left/Right
 jump-to-letter (an O(n) linear scan per keypress over unique titles, fine

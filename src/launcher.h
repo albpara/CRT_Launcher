@@ -69,6 +69,19 @@ void launcher_free(LauncherDatabase *db);
  * process was successfully started; this does not wait for it to exit or
  * verify the game actually loaded.
  *
+ * If no emulator can be resolved at all (no emulator_id set on the game,
+ * and no Default EmulatorPlatform mapping for its platform), and
+ * ver->rom_path ends in ".exe", it's launched directly instead with no
+ * arguments -- LaunchBox's "Windows" platform (Windows.xml, if it exists)
+ * and any other unmapped-but-exe-pointing platform work this way, since
+ * LaunchBox itself just launches those ApplicationPaths directly rather
+ * than through an emulator. Unlike a ROM path, ver->rom_path is used
+ * as-is here rather than joined onto launchbox_dir -- a Windows-platform
+ * ApplicationPath is already LaunchBox's own absolute path to the exe,
+ * which can live anywhere on disk, not just under the LaunchBox install.
+ * Anything else with no resolvable emulator still just logs a warning and
+ * fails, same as before.
+ *
  * This handles the %romlocation% + bare-romname pattern MAME uses and the
  * full-path pattern most other emulators use, but does NOT replicate
  * LaunchBox's own launch behavior beyond that: no AutoHotkey nag-screen
