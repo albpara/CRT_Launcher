@@ -135,13 +135,30 @@ static SDL_bool action_is_held(InputAction action, const AppConfig *cfg, const U
     return SDL_FALSE;
 }
 
-/* Marks both edges "already held" so the key/button that just ended
-   calibration (or woke the screensaver) can't double-fire as a fresh
-   SELECT/BACK next frame -- e.g. Escape canceling calibration used to
-   immediately re-fire BACK and quit the app. */
-static void prime_edges_held(EdgeState *select_edge, EdgeState *back_edge) {
-    select_edge->held = SDL_TRUE;
-    back_edge->held = SDL_TRUE;
+/* Every per-frame input tracker: repeat timers for the four directions
+   (indexed by INPUT_ACTION_UP..RIGHT) plus one-shot edges for
+   SELECT/BACK. */
+typedef struct {
+    KeyRepeatState nav[4];
+    EdgeState select_edge;
+    EdgeState back_edge;
+} InputState;
+
+/* Marks every tracker as already-held, so the key/button that just ended
+   calibration or woke the screensaver is consumed rather than also acting
+   on the list -- Escape cancelling calibration used to immediately
+   re-fire BACK and quit the app. The directions need it just as much as
+   the edges: while a modal or the screensaver is up their dispatch is
+   skipped, so key_repeat_tick would see the waking press as a fresh one
+   and scroll the list underneath. A direction that stays held simply
+   resumes repeating after the usual delay. */
+static void prime_inputs_held(InputState *in, Uint32 now, int delay_ms) {
+    for (int i = 0; i < 4; i++) {
+        in->nav[i].held = SDL_TRUE;
+        in->nav[i].next_repeat_time = now + (Uint32)delay_ms;
+    }
+    in->select_edge.held = SDL_TRUE;
+    in->back_edge.held = SDL_TRUE;
 }
 
 /* Stores one captured binding, advances the calibration step, and on the
@@ -149,8 +166,8 @@ static void prime_edges_held(EdgeState *select_edge, EdgeState *back_edge) {
    message up. Shared by all four capture event types. */
 static void calibrate_capture(InputBinding captured, InputBinding *calibrate_bindings, int *calibrate_step,
                                SDL_bool *calibrating, SDL_bool *calibration_done_message,
-                               EdgeState *select_edge, EdgeState *back_edge,
-                               GameListState *gamelist, AppConfig *cfg, const char *config_path) {
+                               InputState *in, GameListState *gamelist, AppConfig *cfg,
+                               const char *config_path) {
     char value[64];
     input_binding_to_string(&captured, value, sizeof(value));
     SDL_Log("[main] Calibrated %s = %s", INPUT_ACTION_NAMES[*calibrate_step], value);
@@ -164,7 +181,7 @@ static void calibrate_capture(InputBinding captured, InputBinding *calibrate_bin
         config_save_bindings(config_path, cfg->bindings);
         *calibrating = SDL_FALSE;
         *calibration_done_message = SDL_TRUE;
-        prime_edges_held(select_edge, back_edge);
+        prime_inputs_held(in, SDL_GetTicks(), cfg->nav_repeat_delay_ms);
         snprintf(gamelist->system_modal_status, sizeof(gamelist->system_modal_status),
                  "SAVED - FIND ME AT THE TOP OF THE LIST");
         gamelist->system_modal_hint[0] = '\0';
@@ -230,12 +247,7 @@ int main(int argc, char *argv[]) {
     SDL_Log("[main] Entering main loop. %s toggles resolution; close the window to quit.",
             SDL_GetKeyName(cfg.toggle_hotkey));
 
-    KeyRepeatState nav_up = {0};
-    KeyRepeatState nav_down = {0};
-    KeyRepeatState nav_left = {0};
-    KeyRepeatState nav_right = {0};
-    EdgeState select_edge = {0};
-    EdgeState back_edge = {0};
+    InputState input = {0};
 
     /* CRT burn-in protection -- see AppConfig.screensaver_timeout_ms.
        Runs regardless of focus (blanking behind a running game is
@@ -288,7 +300,7 @@ int main(int argc, char *argv[]) {
                     screensaver_active = SDL_FALSE;
                     last_activity_time = SDL_GetTicks();
                     SDL_ShowCursor(SDL_DISABLE);
-                    prime_edges_held(&select_edge, &back_edge);
+                    prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
                 continue;
             }
@@ -311,7 +323,7 @@ int main(int argc, char *argv[]) {
                 if (is_activity_event) {
                     SDL_Log("[main] Screensaver dismissed");
                     screensaver_active = SDL_FALSE;
-                    prime_edges_held(&select_edge, &back_edge);
+                    prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
                 /* Event swallowed either way -- the waking press must not
                    also complete a calibration step or toggle resolution. */
@@ -322,7 +334,7 @@ int main(int argc, char *argv[]) {
                     if (event.key.keysym.sym == SDLK_ESCAPE) {
                         calibrating = SDL_FALSE;
                         gamelist.system_modal_open = SDL_FALSE;
-                        prime_edges_held(&select_edge, &back_edge);
+                        prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                         SDL_Log("[main] Calibration cancelled");
                     } else {
                         InputBinding captured;
@@ -330,7 +342,7 @@ int main(int argc, char *argv[]) {
                         captured.type = INPUT_BINDING_KEYBOARD;
                         captured.key = event.key.keysym.sym;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
+                                           &calibration_done_message, &input, &gamelist, &cfg, config_path);
                     }
                 } else if (event.type == SDL_JOYBUTTONDOWN) {
                     InputBinding captured;
@@ -338,7 +350,7 @@ int main(int argc, char *argv[]) {
                     captured.type = INPUT_BINDING_JOY_BUTTON;
                     captured.joy_button = event.jbutton.button;
                     calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                       &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
+                                       &calibration_done_message, &input, &gamelist, &cfg, config_path);
                 } else if (event.type == SDL_JOYHATMOTION) {
                     /* Logged unconditionally so "no hat events at all" is
                        diagnosable from the log. */
@@ -356,7 +368,7 @@ int main(int argc, char *argv[]) {
                         captured.joy_hat = event.jhat.hat;
                         captured.joy_hat_direction = dir;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
+                                           &calibration_done_message, &input, &gamelist, &cfg, config_path);
                     }
                 } else if (event.type == SDL_JOYAXISMOTION) {
                     if (event.jaxis.value > -JOYSTICK_AXIS_THRESHOLD && event.jaxis.value < JOYSTICK_AXIS_THRESHOLD) {
@@ -369,7 +381,7 @@ int main(int argc, char *argv[]) {
                         captured.joy_axis_direction = (event.jaxis.value > 0) ? 1 : -1;
                         axis_needs_release = SDL_TRUE;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
+                                           &calibration_done_message, &input, &gamelist, &cfg, config_path);
                     }
                 }
             } else if (event.type == SDL_KEYDOWN && !event.key.repeat && event.key.keysym.sym == cfg.toggle_hotkey) {
@@ -401,7 +413,7 @@ int main(int argc, char *argv[]) {
                     screensaver_active = SDL_FALSE;
                     last_activity_time = now;
                     /* The waking press must not also act on the list. */
-                    prime_edges_held(&select_edge, &back_edge);
+                    prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
             } else {
                 if (any_action_held) {
@@ -414,21 +426,21 @@ int main(int argc, char *argv[]) {
             }
 
             if (!calibrating && !screensaver_active) {
-                if (key_repeat_tick(&nav_up, up_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                if (key_repeat_tick(&input.nav[INPUT_ACTION_UP], up_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
                     gamelist_move(&gamelist, &launchbox, -1);
                 }
-                if (key_repeat_tick(&nav_down, down_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                if (key_repeat_tick(&input.nav[INPUT_ACTION_DOWN], down_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
                     gamelist_move(&gamelist, &launchbox, 1);
                 }
-                if (key_repeat_tick(&nav_left, left_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                if (key_repeat_tick(&input.nav[INPUT_ACTION_LEFT], left_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
                     gamelist_jump_letter(&gamelist, &launchbox, -1);
                 }
-                if (key_repeat_tick(&nav_right, right_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                if (key_repeat_tick(&input.nav[INPUT_ACTION_RIGHT], right_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
                     gamelist_jump_letter(&gamelist, &launchbox, 1);
                 }
 
-                SDL_bool select_pressed = edge_tick(&select_edge, select_held);
-                SDL_bool back_pressed = edge_tick(&back_edge, back_held);
+                SDL_bool select_pressed = edge_tick(&input.select_edge, select_held);
+                SDL_bool back_pressed = edge_tick(&input.back_edge, back_held);
 
                 if (calibration_done_message) {
                     /* Either action dismisses the completion message. */
