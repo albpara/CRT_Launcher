@@ -293,17 +293,11 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
 }
 
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
-                   const LaunchboxInfo *lb, GameListState *gl, SDL_bool screensaver_active) {
+                   const LaunchboxInfo *lb, GameListState *gl) {
     SDL_Renderer *renderer = rc->renderer;
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-
-    if (screensaver_active) {
-        /* Solid black only -- CRT burn-in protection. */
-        SDL_RenderPresent(renderer);
-        return;
-    }
 
     draw_checkerboard(renderer, dc->width, dc->height);
 

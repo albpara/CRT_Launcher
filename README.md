@@ -16,8 +16,9 @@ resolution (e.g. 320x240) with pixel-perfect, unfiltered rendering.
 - Per-platform show/hide filter, persisted to `config.ini`.
 - In-app controller calibration (keyboard, buttons, hats, analog axes),
   auto-started on first run.
-- Run-at-Windows-startup toggle, screensaver (blank-to-black CRT burn-in
-  protection), exclusive-fullscreen low-res with windowed fallback.
+- Run-at-Windows-startup toggle, a Galaga starfield screensaver (CRT
+  burn-in protection), exclusive-fullscreen low-res with windowed
+  fallback.
 
 ## How to build
 
@@ -80,8 +81,9 @@ keys/Enter/Escape/Shift always work as a hardcoded keyboard fallback.
 - The configured hotkey (default **F5**) toggles low-res <-> desktop
   resolution.
 
-After a minute without input the screen blanks to black; any input wakes
-it. See the comments in [config.ini](config.ini) for every setting.
+After a minute without input a Galaga starfield takes over the screen;
+any input wakes it. See the comments in [config.ini](config.ini) for every
+setting.
 
 ## Known limitations
 

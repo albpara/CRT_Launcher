@@ -32,6 +32,7 @@ add_executable(crt_launcher
     src/xml_util.c
     src/launcher.c
     src/startup.c
+    src/screensaver.c
 )
 
 if (CRT_LAUNCHER_NO_CONSOLE)

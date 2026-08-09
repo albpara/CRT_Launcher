@@ -16,9 +16,10 @@ SDL_bool render_init(SDL_Window *window, RenderContext *rc);
 
 /* Draws one frame: checkerboard, title + game counter, the scrollable
    list, and whichever modal is open. Mutates gl->scroll_offset (layout is
-   decided here). When `screensaver_active`, draws solid black only. */
+   decided here). Not called while the screensaver is up -- see
+   screensaver_draw(). */
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
-                   const LaunchboxInfo *lb, GameListState *gl, SDL_bool screensaver_active);
+                   const LaunchboxInfo *lb, GameListState *gl);
 
 /* Generic modal: dim overlay + centered box of plain strings, one
    optionally highlighted (selected_index, -1 for none). min_width_chars 0

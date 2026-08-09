@@ -150,6 +150,14 @@ overall spec beyond what's in the code and README right now.
   isolation is still needed.
 - `xml_util.c/h` — the substring-XML helpers shared by `launchbox.c` and
   `launcher.c`.
+- `screensaver.c/h` — the Galaga (Namco 05XX) starfield shown instead of a
+  blank screen. LFSR taps/hit-mask/colour bits verified against MAME's
+  `starfield_05xx.cpp`; the field is 256 rows tall because the LFSR runs
+  256 cycles/line for 256 lines — exactly one full period — which is what
+  makes the scroll wrap seamlessly. Field *width* is the live window
+  width, so the pattern is generated to fit rather than stretched, and
+  stars stay 1x1 at any resolution (explicit user requirement). `main.c`
+  calls `screensaver_draw()` in place of `render_frame()` while it's up.
 - `startup.c/h` — whether CRT Launcher runs at Windows sign-in, via a
   single `"CRT Launcher"` value under the current user's
   `HKCU\...\Run` key (per-user, no admin rights, no `.lnk`/COM). No
