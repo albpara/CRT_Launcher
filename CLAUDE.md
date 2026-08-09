@@ -53,6 +53,13 @@ overall spec beyond what's in the code and README right now.
   rewrite just one section/line of `config.ini` in place (binary-mode file
   I/O throughout — Windows' text-mode CRT would otherwise double-insert
   `\r` on a read-modify-write round trip of an already-CRLF file).
+  `config_resolve_default_path()` locates config.ini next to the exe's own
+  file (`GetModuleFileNameA`), not via the process's current working
+  directory — CWD is NOT reliably the exe's folder (confirmed: a
+  Windows-startup Run key launch, see `startup.c`, put it somewhere like
+  `C:\Windows\System32`, which broke config.ini discovery entirely on an
+  auto-launched install before this existed). `main.c` calls it once and
+  reuses the result for every `config_load`/`config_save_*` call.
 - `main.c` — entry point and the only place with a real event loop. Wires
   every other module together, resolves each frame's held/pressed input
   against `AppConfig.bindings` (`binding_is_held`) with its own
@@ -100,7 +107,15 @@ overall spec beyond what's in the code and README right now.
 - `launcher.c/h` — parses `Data\Emulators.xml` once at startup and keeps it
   in memory (not re-read per launch), then spawns the emulator via
   `CreateProcessA` with the working directory set to the emulator's own
-  folder.
+  folder. Always passes `CREATE_NEW_PROCESS_GROUP` -- without it, a
+  console-subsystem child (some emulator builds are) shares this
+  process's console/process group, and a console control event generated
+  when the child's console session tears down on exit can propagate back
+  and silently kill the launcher too (no crash dialog, nothing for
+  `SDL_Log` to catch) -- this was observed in practice as the launcher
+  vanishing sometime after returning from a game, with the console window
+  itself still open. Don't drop this flag without re-confirming the
+  isolation is still needed.
 - `xml_util.c/h` — the substring-XML helpers shared by `launchbox.c` and
   `launcher.c`.
 - `startup.c/h` — whether CRT Launcher runs at Windows sign-in, via a

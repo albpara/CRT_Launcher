@@ -12,6 +12,9 @@
    (each up to LAUNCHBOX_PLATFORM_MAX in launchbox.h) -- generous, matching
    this app's "config.ini is a few KB at most" assumption elsewhere. */
 #define CONFIG_SELECTED_PLATFORMS_MAX 2048
+/* Room for the exe's own directory (CONFIG_LAUNCHBOX_DIR_MAX) plus
+   "\config.ini" -- see config_resolve_default_path(). */
+#define CONFIG_DEFAULT_PATH_MAX (CONFIG_LAUNCHBOX_DIR_MAX + 32)
 
 /* One physical input a bindable action can be tied to. Deliberately
    source-agnostic (keyboard OR joystick) -- main.c resolves whichever one
@@ -111,6 +114,20 @@ typedef struct {
        this actually gets resolved and re-persisted. */
     char selected_platforms[CONFIG_SELECTED_PLATFORMS_MAX];
 } AppConfig;
+
+/* Resolves `out` to "config.ini" next to this exe's own file (via
+   GetModuleFileNameA on Windows), NOT relative to the process's current
+   working directory -- CWD cannot be assumed to be the exe's own folder.
+   This matters in practice: launched via a plain double-click or a
+   shortcut with an explicit "Start in", CWD happens to match, but
+   launched via a Windows-startup Run key entry (see startup.c) it does
+   not, which broke config.ini discovery entirely on an auto-launched
+   install before this existed. Falls back to the bare relative
+   "config.ini" if the exe's own path can't be resolved (non-Windows, or
+   GetModuleFileNameA fails) -- same behavior as before this function
+   existed. Call once at startup and reuse the result for every
+   config_load/config_save_* call in the process, the way main.c does. */
+void config_resolve_default_path(char *out, size_t out_cap);
 
 /* Reads `path` (INI format) into `out`. Logs what was loaded, what was
    defaulted, and why. Never fails -- a missing/broken file just means

@@ -236,10 +236,19 @@ void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta) {
 
     if (state->selected_version >= 0) {
         /* Modal open -- stay scoped to its rows, wrapping at the ends.
-           The underlying game list doesn't move while it's up. Only
-           reachable for a real group (see gamelist_toggle_expand), so
-           gamelist_selected_group() is guaranteed non-NULL here. */
+           The underlying game list doesn't move while it's up. Normally
+           only reachable for a real group (see gamelist_toggle_expand),
+           but defended anyway rather than trusting that invariant always
+           holds -- the same "assume it's fine" reasoning was what let a
+           NULL-deref crash reach production once before elsewhere in this
+           file (see the comment on the guard above). If the group somehow
+           doesn't resolve, just close the modal instead of dereferencing
+           NULL. */
         const LaunchboxGameGroup *grp = gamelist_selected_group(state, lb);
+        if (!grp) {
+            state->selected_version = -1;
+            return;
+        }
         int version_count = grp->version_count;
         int next = (state->selected_version + delta) % version_count;
         if (next < 0) {

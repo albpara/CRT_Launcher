@@ -345,11 +345,12 @@ itself is appended per that emulator's quoting/path rules (`NoQuotes`,
 no `Default` `EmulatorPlatform` mapping for its platform) **and its
 `ApplicationPath` ends in `.exe`**, it's launched directly instead --
 no command line, no `%romlocation%` substitution, just the exe itself with
-its own containing folder as the working directory. `ApplicationPath` is
-used exactly as LaunchBox stored it here, *not* joined onto
-`launchbox_dir` the way a relative ROM path is -- Windows-platform entries
-store their own absolute path already (e.g. `D:\Fightcade\Fightcade2.exe`,
-nowhere near the LaunchBox install). This is how LaunchBox's
+its own containing folder as the working directory. `ApplicationPath` here
+can be either absolute (software installed outside the LaunchBox folder
+entirely, e.g. `D:\Fightcade\Fightcade2.exe`) or relative to
+`launchbox_dir` (an app living inside the LaunchBox folder tree, same
+convention as a ROM path) -- both are detected and handled, confirmed
+necessary against a real database that had both cases. This is how LaunchBox's
 "Windows" platform works in a real database (`Data\Platforms\Windows.xml`,
 if you have one): those games just don't have an emulator configured at
 all, since LaunchBox itself launches their `ApplicationPath` directly. The

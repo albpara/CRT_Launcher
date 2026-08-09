@@ -11,8 +11,6 @@
 #include "render.h"
 #include "startup.h"
 
-#define CONFIG_PATH "config.ini"
-
 /* Bound for how many physical joysticks/pads we'll keep open at once --
    comfortably above any real cabinet setup (typically one encoder), just a
    safety cap. */
@@ -194,7 +192,7 @@ static void prime_edges_held(EdgeState *select_edge, EdgeState *back_edge) {
 static void calibrate_capture(InputBinding captured, InputBinding *calibrate_bindings, int *calibrate_step,
                                SDL_bool *calibrating, SDL_bool *calibration_done_message,
                                EdgeState *select_edge, EdgeState *back_edge,
-                               GameListState *gamelist, AppConfig *cfg) {
+                               GameListState *gamelist, AppConfig *cfg, const char *config_path) {
     char value[64];
     input_binding_to_string(&captured, value, sizeof(value));
     SDL_Log("[main] Calibrated %s = %s", INPUT_ACTION_NAMES[*calibrate_step], value);
@@ -205,7 +203,7 @@ static void calibrate_capture(InputBinding captured, InputBinding *calibrate_bin
     if (*calibrate_step >= INPUT_ACTION_COUNT) {
         memcpy(cfg->bindings, calibrate_bindings, sizeof(cfg->bindings));
         cfg->bindings_calibrated = SDL_TRUE;
-        config_save_bindings(CONFIG_PATH, cfg->bindings);
+        config_save_bindings(config_path, cfg->bindings);
         *calibrating = SDL_FALSE;
         *calibration_done_message = SDL_TRUE;
         prime_edges_held(select_edge, back_edge);
@@ -247,8 +245,17 @@ int main(int argc, char *argv[]) {
     SDL_Joystick *joysticks[MAX_TRACKED_JOYSTICKS] = {0};
     open_all_joysticks(joysticks);
 
+    /* Resolved from the exe's own directory, not the process's current
+       working directory -- see config_resolve_default_path()'s doc
+       comment for why that distinction matters (a Windows-startup Run key
+       launch does not preserve the exe's folder as CWD the way a
+       shortcut's "Start in" field would). Computed once and reused for
+       every config_load/config_save_* call below. */
+    char config_path[CONFIG_DEFAULT_PATH_MAX];
+    config_resolve_default_path(config_path, sizeof(config_path));
+
     AppConfig cfg;
-    config_load(CONFIG_PATH, &cfg);
+    config_load(config_path, &cfg);
 
     /* Hidden whenever it's over one of this app's windows -- SDL restores
        the normal OS cursor automatically once it leaves. There's no on-
@@ -351,7 +358,7 @@ int main(int argc, char *argv[]) {
                         captured.type = INPUT_BINDING_KEYBOARD;
                         captured.key = event.key.keysym.sym;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg);
+                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
                     }
                 } else if (event.type == SDL_JOYBUTTONDOWN) {
                     InputBinding captured;
@@ -359,7 +366,7 @@ int main(int argc, char *argv[]) {
                     captured.type = INPUT_BINDING_JOY_BUTTON;
                     captured.joy_button = event.jbutton.button;
                     calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                       &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg);
+                                       &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
                 } else if (event.type == SDL_JOYHATMOTION) {
                     /* Logged unconditionally (not just on a successful
                        capture) -- if a direction still doesn't register
@@ -381,7 +388,7 @@ int main(int argc, char *argv[]) {
                         captured.joy_hat = event.jhat.hat;
                         captured.joy_hat_direction = dir;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg);
+                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
                     } /* SDL_HAT_CENTERED (releasing back to center) isn't a press -- ignored */
                 } else if (event.type == SDL_JOYAXISMOTION) {
                     if (event.jaxis.value > -JOYSTICK_AXIS_THRESHOLD && event.jaxis.value < JOYSTICK_AXIS_THRESHOLD) {
@@ -398,7 +405,7 @@ int main(int argc, char *argv[]) {
                         captured.joy_axis_direction = (event.jaxis.value > 0) ? 1 : -1;
                         axis_needs_release = SDL_TRUE;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg);
+                                           &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
                     } /* else: still the same held push past threshold -- already captured, ignored until release */
                 }
             } else if (event.type == SDL_KEYDOWN && !event.key.repeat && event.key.keysym.sym == cfg.toggle_hotkey) {
@@ -504,7 +511,7 @@ int main(int argc, char *argv[]) {
 
                         char csv[CONFIG_SELECTED_PLATFORMS_MAX];
                         gamelist_format_platform_selection(&gamelist, &launchbox, csv, sizeof(csv));
-                        config_save_selected_platforms(CONFIG_PATH, csv);
+                        config_save_selected_platforms(config_path, csv);
 
                         SDL_Log("[main] Platform '%s' %s", launchbox.platform_names[idx],
                                 (gamelist.platform_selected && gamelist.platform_selected[idx]) ? "enabled" : "disabled");
@@ -533,6 +540,14 @@ int main(int argc, char *argv[]) {
                                 if (!launcher_launch(&launcher, ver)) {
                                     SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
                                 }
+
+                                /* Close the version-picker modal if launching from
+                                   within it -- without this, selected_version stayed
+                                   >= 0 after the launch, so the app was still
+                                   logically "inside" the modal (and would keep
+                                   showing it) the whole time the game was running
+                                   and after returning from it. */
+                                gamelist.selected_version = -1;
                             }
                         }
                     }

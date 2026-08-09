@@ -161,17 +161,21 @@ static SDL_bool looks_like_launchbox_install(const char *dir) {
     return (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) ? SDL_TRUE : SDL_FALSE;
 }
 
-/* Falls back to a LaunchBox install living as a sibling of this exe's own
-   folder (e.g. "Cabinet\CRT Launcher\crt_launcher.exe" next to
-   "Cabinet\LaunchBox\") -- a natural layout for something meant to replace
-   BigBox on the same machine. Deliberately based on the exe's own
-   directory (GetModuleFileNameA), not the current working directory --
-   CWD depends on how the app was launched (a shortcut's "Start in" field,
-   a script, etc.) and isn't reliable for "sibling of the exe" the way the
-   exe's own path is. Only ever consulted when config.ini leaves
-   launchbox_dir blank, so it never overrides an explicit setting. Returns
-   SDL_TRUE and fills `out` only if a real-looking install was found. */
-static SDL_bool autodetect_launchbox_dir(char *out, size_t out_cap) {
+/* Resolves `out` to this exe's own containing directory (via
+   GetModuleFileNameA), no trailing separator. Deliberately NOT the
+   current working directory -- CWD depends on how the app was launched
+   and is not reliably the exe's own folder: a double-clicked shortcut
+   with an explicit "Start in" gets it right, but a plain double-click on
+   the exe, and critically a Windows-startup Run key entry (see
+   startup.c), do not -- a Run key launch in particular was observed
+   landing in something like C:\Windows\System32, which broke config.ini
+   discovery below. SDL_FALSE if GetModuleFileNameA fails or returns a
+   path with no '\' in it (both effectively "can't happen" on a real
+   Windows install, but handled rather than assumed). Shared by
+   autodetect_launchbox_dir (sibling-folder LaunchBox detection) and
+   config_resolve_default_path (this exe's own config.ini) -- both need
+   the same "where am I actually running from" answer. */
+static SDL_bool get_exe_directory(char *out, size_t out_cap) {
     char exe_path[CONFIG_LAUNCHBOX_DIR_MAX];
     DWORD len = GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
     if (len == 0 || len >= sizeof(exe_path)) {
@@ -184,8 +188,24 @@ static SDL_bool autodetect_launchbox_dir(char *out, size_t out_cap) {
     }
     *last_sep = '\0'; /* exe_path is now the exe's own directory */
 
+    snprintf(out, out_cap, "%s", exe_path);
+    return SDL_TRUE;
+}
+
+/* Falls back to a LaunchBox install living as a sibling of this exe's own
+   folder (e.g. "Cabinet\CRT Launcher\crt_launcher.exe" next to
+   "Cabinet\LaunchBox\") -- a natural layout for something meant to replace
+   BigBox on the same machine. Only ever consulted when config.ini leaves
+   launchbox_dir blank, so it never overrides an explicit setting. Returns
+   SDL_TRUE and fills `out` only if a real-looking install was found. */
+static SDL_bool autodetect_launchbox_dir(char *out, size_t out_cap) {
+    char exe_dir[CONFIG_LAUNCHBOX_DIR_MAX];
+    if (!get_exe_directory(exe_dir, sizeof(exe_dir))) {
+        return SDL_FALSE;
+    }
+
     char candidate[CONFIG_LAUNCHBOX_DIR_MAX];
-    snprintf(candidate, sizeof(candidate), "%s\\..\\LaunchBox", exe_path);
+    snprintf(candidate, sizeof(candidate), "%s\\..\\LaunchBox", exe_dir);
 
     if (!looks_like_launchbox_install(candidate)) {
         return SDL_FALSE;
@@ -195,6 +215,20 @@ static SDL_bool autodetect_launchbox_dir(char *out, size_t out_cap) {
     return SDL_TRUE;
 }
 #endif /* _WIN32 */
+
+void config_resolve_default_path(char *out, size_t out_cap) {
+#ifdef _WIN32
+    char exe_dir[CONFIG_LAUNCHBOX_DIR_MAX];
+    if (get_exe_directory(exe_dir, sizeof(exe_dir))) {
+        snprintf(out, out_cap, "%s\\config.ini", exe_dir);
+        return;
+    }
+#endif
+    /* Non-Windows, or GetModuleFileNameA failed -- fall back to whatever
+       the process's own working directory happens to be, same as the
+       hardcoded "config.ini" this replaces. */
+    snprintf(out, out_cap, "config.ini");
+}
 
 void config_load(const char *path, AppConfig *out) {
     out->width = CONFIG_DEFAULT_WIDTH;

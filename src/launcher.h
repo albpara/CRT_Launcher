@@ -75,10 +75,10 @@ void launcher_free(LauncherDatabase *db);
  * arguments -- LaunchBox's "Windows" platform (Windows.xml, if it exists)
  * and any other unmapped-but-exe-pointing platform work this way, since
  * LaunchBox itself just launches those ApplicationPaths directly rather
- * than through an emulator. Unlike a ROM path, ver->rom_path is used
- * as-is here rather than joined onto launchbox_dir -- a Windows-platform
- * ApplicationPath is already LaunchBox's own absolute path to the exe,
- * which can live anywhere on disk, not just under the LaunchBox install.
+ * than through an emulator. That path may be absolute already (software
+ * installed outside the LaunchBox folder entirely) or relative to
+ * launchbox_dir (same convention as a ROM path) -- both are handled,
+ * confirmed necessary in practice: real data has included both cases.
  * Anything else with no resolvable emulator still just logs a warning and
  * fails, same as before.
  *
