@@ -76,6 +76,17 @@ typedef struct {
     int width;
     int height;
     int refresh_rate;      /* Hz. 0 means "any refresh rate is fine". */
+    /* How long (ms) with no input before the screen blanks to solid black
+       -- CRT burn-in protection, since the game list is otherwise a
+       static, fairly bright image that could sit unchanged for hours on
+       a cabinet nobody's using. 0 disables it entirely. Any held/pressed
+       input wakes it immediately; see main.c for how that wake is kept
+       from ALSO acting on the list underneath (the same class of problem
+       prime_edges_held solves for calibration). Milliseconds internally
+       (matches SDL_GetTicks(), what main.c actually compares this
+       against) even though config.ini's screensaver_timeout_seconds key
+       is in whole seconds -- config_load() does the x1000 conversion. */
+    int screensaver_timeout_ms;
     SDL_Keycode toggle_hotkey;
     /* Up/Down/Left/Right navigation repeat, applied by main.c's own timer
        (SDL_GetTicks-based, not the OS's key-repeat rate -- see main.c) so
@@ -131,7 +142,13 @@ void config_resolve_default_path(char *out, size_t out_cap);
 
 /* Reads `path` (INI format) into `out`. Logs what was loaded, what was
    defaulted, and why. Never fails -- a missing/broken file just means
-   `out` comes back as all defaults. */
+   `out` comes back as all defaults, EXCEPT launchbox_dir, which still
+   goes through sibling-folder auto-detection same as a real file that
+   just left the key blank would (a truly bare install -- e.g. only
+   crt_launcher.exe copied somewhere -- can still find an adjacent
+   LaunchBox folder this way). If `path` didn't exist at all, a fresh
+   default config.ini is written there afterward so it exists (and is
+   editable) for next time. */
 void config_load(const char *path, AppConfig *out);
 
 /* Rewrites just the [bindings] section of `path` to reflect `bindings`,

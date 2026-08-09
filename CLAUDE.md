@@ -18,10 +18,14 @@ overall spec beyond what's in the code and README right now.
   - `build/` — default config, console-subsystem exe. This is the normal
     day-to-day dev build; `SDL_Log` output is visible in the terminal window
     it opens alongside the app.
-  - `build-noconsole/` — configured with `-DCRT_LAUNCHER_NO_CONSOLE=ON`, a
-    WINDOWS-subsystem exe with no console ever (not even hidden — Windows
-    never allocates one). No log output at all. Only touch this one when the
-    no-console behavior itself is what's being verified.
+  - `build-noconsole/` — configured with `-DCRT_LAUNCHER_NO_CONSOLE=ON`, the
+    distribution/deployment build: a WINDOWS-subsystem exe with no console
+    ever (not even hidden — Windows never allocates one) AND SDL2 statically
+    linked into the exe itself (`SDL2::SDL2-static`, MSYS2's package ships
+    `libSDL2.a`) instead of dynamically against `SDL2.dll` — the only
+    runtime dependencies left are standard Windows system DLLs, verified via
+    `objdump -p`. No log output at all. Only touch this one when the
+    no-console/static-linking behavior itself is what's being verified.
 - After any source change: rebuild `build/`, then re-set `build/config.ini`'s
   `launchbox_dir=E:\LaunchBox` (and, until it's been calibrated once, a
   `[bindings]` section — see "Controls" below) and launch
@@ -46,7 +50,21 @@ overall spec beyond what's in the code and README right now.
 ## Architecture
 
 - `config.c/h` — hand-rolled INI parser, `AppConfig`. No hot-reload; changes
-  take effect on next launch. Also owns the `InputBinding`/`InputAction`
+  take effect on next launch. `config_load()` no longer early-returns when
+  `path` doesn't exist at all -- it used to, which skipped sibling-folder
+  `launchbox_dir` auto-detection entirely (a bare install with only the
+  exe copied somewhere showed no games even with LaunchBox sitting right
+  there as a sibling, since detection never got a chance to run). Now it
+  falls through to the same validation/auto-detect/logging a real file
+  goes through, then `config_write_default_file()` writes a fresh minimal
+  config.ini to `path` afterward -- deliberately NOT a copy of the tracked
+  root `config.ini` (that one's the fully-documented reference; this is a
+  short bootstrap kept intentionally out of lockstep with it), and
+  deliberately leaves both `[bindings]` (triggers first-launch calibration,
+  same as any uncalibrated install) and `launchbox_dir` (keeps
+  auto-detection running on every future launch) absent/blank rather than
+  baking in whatever was true at that one moment. Also owns the
+  `InputBinding`/`InputAction`
   types (keyboard, joystick button, hat, or axis — deliberately
   source-agnostic, resolved against real-time input state in `main.c`) and
   `config_save_bindings()`/`config_save_selected_platforms()`, which
@@ -69,9 +87,23 @@ overall spec beyond what's in the code and README right now.
   layered under whatever's actually calibrated, so a keyboard plugged into
   the cabinet always works as an escape hatch. Also drives the in-app
   calibration flow itself (press-to-bind capture for all four binding
-  types, auto-starting on an uncalibrated install) and the SELECT/BACK
+  types, auto-starting on an uncalibrated install), the SELECT/BACK
   dispatch for launching, opening the system/platform rows, and the exit
-  confirmation.
+  confirmation, and the screensaver idle timer (`last_activity_time`; see
+  `AppConfig.screensaver_timeout_ms`). Runs unconditionally, including
+  during calibration -- an uncalibrated cabinet sitting untouched on the
+  auto-started calibration prompt still needs to blank eventually. Refreshed
+  two ways: every frame from `action_is_held()` on the seven mapped actions
+  (works once real bindings exist), and directly off raw `SDL_KEYDOWN`/
+  `SDL_JOYBUTTONDOWN`/`SDL_JOYHATMOTION`/`SDL_JOYAXISMOTION` events in the
+  poll loop (needed because during calibration there ARE no real bindings
+  yet to check `action_is_held()` against, and a joystick-only cabinet --
+  exactly the case calibration exists for -- has no keyboard fallback to
+  fall back on either). Waking reuses `prime_edges_held()` so the waking
+  press doesn't also act on the list, same reasoning as its calibration
+  use -- and while the screensaver's up, the event loop swallows the
+  waking event itself too, so it can't also complete a calibration step or
+  fire the resolution-toggle hotkey.
 - `display.c/h` — SDL display-mode selection with exact-match-or-windowed-
   fallback logic, plus fullscreen/desktop toggling.
 - `render.c/h` — all drawing: checkerboard background, the hand-rolled

@@ -96,12 +96,14 @@ CMake finds SDL2 automatically via `find_package(SDL2 CONFIG)` since it's
 already on `CMAKE_PREFIX_PATH` through the MinGW install. The executable,
 `SDL2.dll`, and `config.ini` all land directly in `build/`.
 
-### Optional: a no-console build for deployment
+### Optional: a no-console distribution build for deployment
 
-The default build is a console-subsystem exe -- that's the terminal window
-you see alongside the app, where `SDL_Log` output goes. For a build where
-no console is ever created at all, configure a *separate* build directory
-with `CRT_LAUNCHER_NO_CONSOLE=ON`:
+The default build is a console-subsystem exe, dynamically linked against
+SDL2 -- the terminal window you see alongside the app is where `SDL_Log`
+output goes, and `SDL2.dll` sits next to the exe. Both of those are handy
+for day-to-day development but not what you want on the cabinet. For a
+build with neither, configure a *separate* build directory with
+`CRT_LAUNCHER_NO_CONSOLE=ON`:
 
 ```bash
 cmake -B build-noconsole -G "MinGW Makefiles" -DCRT_LAUNCHER_NO_CONSOLE=ON
@@ -109,11 +111,14 @@ cmake --build build-noconsole
 ```
 
 This produces a WINDOWS-subsystem `crt_launcher.exe` in `build-noconsole/`
-with the same `config.ini`/`SDL2.dll` copy step as the normal build. Trade-
-off: `SDL_Log` has nowhere to write to in this build, so there's no log at
-all, visible or otherwise -- keep the regular `build/` around for
-day-to-day development where you actually want to see it, and only use
-this one once you're happy and ready to deploy to the cabinet.
+with SDL2 statically linked *into* the exe itself, so there's no
+`SDL2.dll` to keep track of -- copying `crt_launcher.exe` and `config.ini`
+to the cabinet is enough, nothing else. Trade-offs: `SDL_Log` has nowhere
+to write to in this build, so there's no log at all, visible or otherwise;
+and the exe is a few MB larger since SDL2's code is baked in rather than
+shared. Keep the regular `build/` around for day-to-day development where
+you actually want to see the log and rebuild often (dynamic linking keeps
+that fast); use `build-noconsole/` once you're happy and ready to deploy.
 
 ## Running
 
@@ -125,8 +130,13 @@ build\crt_launcher.exe
 `build\Debug\crt_launcher.exe` or `build\Release\crt_launcher.exe`.)
 
 Run it from a directory that has `config.ini` next to the executable (the
-build already copies it there). Watch the console -- every resolution
-request, what actually got applied, and any fallback is logged there.
+build already copies it there). If `config.ini` is missing entirely --
+e.g. only `crt_launcher.exe` got copied somewhere on its own -- the app
+still works: it runs on built-in defaults for that launch (including still
+auto-detecting a sibling LaunchBox install, see below) and writes a fresh
+`config.ini` next to itself so there's a real, editable file from the next
+launch on. Watch the console -- every resolution request, what actually
+got applied, and any fallback is logged there.
 
 - **On a normal dev monitor**: the configured low-res mode (e.g. 320x240)
   almost certainly won't exist as a real display mode. You'll see a
@@ -161,7 +171,11 @@ the fallback's keyboard names for brevity; on a calibrated cabinet, read
   calibration at any point without saving. Once all seven actions are
   captured, the result is written to `config.ini`'s `[bindings]` section
   and a confirmation message tells you where to find CALIBRATE CONTROLS
-  again (any key/press dismisses it).
+  again (any key/press dismisses it). The screensaver (see below) still
+  applies here too -- an uncalibrated cabinet left sitting on this prompt
+  still blanks after the configured timeout rather than showing a static
+  screen indefinitely, and wakes on any key, button, hat push, or stick
+  push past its deadzone, even before anything's been calibrated yet.
 - Once calibrated (or on the fallback), the game list (sorted
   alphabetically, case-insensitive, favorites highlighted and sorted
   first) is navigable: **Up/Down** move the highlighted selection one row
@@ -214,6 +228,14 @@ The on-screen list always shows a `GAME <N> OF <M>` (or `SETTINGS` /
 currently *filtered* view -- not the full LaunchBox database if some
 platforms are unchecked.
 
+After a minute (configurable) with no input at all, the screen blanks to
+solid black -- CRT burn-in protection, since the game list would otherwise
+sit as a static, fairly bright image indefinitely on a cabinet nobody's
+using. Any input -- any direction, SELECT, BACK, MODIFIER, on keyboard or
+controller -- wakes it back up instantly without also acting on the list
+underneath (the key/button that wakes it is "consumed" by waking, not
+double-counted as a fresh press).
+
 ## Editing config.ini
 
 ```ini
@@ -221,6 +243,7 @@ platforms are unchecked.
 width=320
 height=240
 refresh_rate=60
+screensaver_timeout_seconds=60
 
 [input]
 toggle_hotkey=F5
@@ -234,6 +257,8 @@ selected_platforms=All
 
 - `width` / `height` / `refresh_rate` describe the low-res mode to request.
   `refresh_rate` can be `0` to match any refresh rate at that resolution.
+- `screensaver_timeout_seconds` is how long (seconds) with no input before
+  the screen blanks to solid black. `0` disables the screensaver entirely.
 - `toggle_hotkey` accepts any name `SDL_GetKeyFromName()` understands (e.g.
   `F1`-`F12`, `A`-`Z`, `0`-`9`, `Space`, `Escape`, `Tab`, ...). An
   unrecognized name logs a warning and falls back to `F5`.

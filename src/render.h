@@ -26,9 +26,13 @@ SDL_bool render_init(SDL_Window *window, RenderContext *rc);
    system entry's own modal is (gl->system_modal_open), draws it on top via
    render_draw_modal_list. Mutates `gl->scroll_offset` to keep the
    selected row on screen -- layout (how many rows fit) is decided here,
-   not in gamelist.c. Presents the frame. */
+   not in gamelist.c. Presents the frame.
+
+   If `screensaver_active`, none of the above happens at all -- the whole
+   frame is just solid black (CRT burn-in protection; see
+   AppConfig.screensaver_timeout_ms and main.c for how this gets set). */
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
-                   const LaunchboxInfo *lb, GameListState *gl);
+                   const LaunchboxInfo *lb, GameListState *gl, SDL_bool screensaver_active);
 
 /* Draws a full-screen dim overlay plus a centered, bordered box listing
    `items` (`item_count` C strings), highlighting `selected_index`, with

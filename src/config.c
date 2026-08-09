@@ -16,6 +16,7 @@
 #define CONFIG_DEFAULT_HOTKEY SDLK_F5
 #define CONFIG_DEFAULT_NAV_REPEAT_DELAY_MS 250
 #define CONFIG_DEFAULT_NAV_REPEAT_INTERVAL_MS 40
+#define CONFIG_DEFAULT_SCREENSAVER_TIMEOUT_MS 60000
 
 #define CONFIG_MAX_LINE 256
 #define CONFIG_MAX_SECTION 64
@@ -230,10 +231,63 @@ void config_resolve_default_path(char *out, size_t out_cap) {
     snprintf(out, out_cap, "config.ini");
 }
 
+/* Writes a minimal but complete config.ini to `path` -- called from
+   config_load() when no file was found there at all, so a truly bare
+   deployment (e.g. just crt_launcher.exe copied somewhere on its own,
+   nothing else) still ends up with a real, hand-editable file after its
+   first launch instead of silently running on in-memory defaults forever
+   with no way to see or change them short of hand-authoring one from
+   scratch. Deliberately has no [bindings] section -- its absence is what
+   makes main.c drop into the calibration flow on first launch (see
+   config_load's own doc comment), exactly matching a config.ini that
+   existed but was never calibrated; config_save_bindings() fills that
+   section in for real once calibration finishes, the same as it would for
+   a hand-written file. launchbox_dir is left blank on purpose too, so
+   sibling-folder auto-detection (autodetect_launchbox_dir, just above)
+   keeps running on every future launch rather than baking in a path that
+   would go stale if the LaunchBox install ever moved. This is deliberately
+   NOT a copy of the tracked repo-root config.ini -- that file's the fully
+   documented reference for hand-editing; this is just a working bootstrap
+   for the "nothing here at all" case, kept short so the two don't have to
+   be kept in lockstep. */
+static void config_write_default_file(const char *path) {
+    static const char DEFAULT_CONTENT[] =
+        "; CRT Launcher configuration -- auto-generated because none was found\n"
+        "; next to the exe. Edit values, then just relaunch the app -- no\n"
+        "; rebuild needed.\n"
+        "\n"
+        "[display]\n"
+        "width=320\n"
+        "height=240\n"
+        "refresh_rate=60\n"
+        "screensaver_timeout_seconds=60\n"
+        "\n"
+        "[input]\n"
+        "toggle_hotkey=F5\n"
+        "nav_repeat_delay_ms=250\n"
+        "nav_repeat_interval_ms=40\n"
+        "\n"
+        "[launchbox]\n"
+        "; Leave blank to auto-detect a LaunchBox install as a sibling of\n"
+        "; this exe's own folder; set explicitly if it lives somewhere else.\n"
+        "launchbox_dir=\n"
+        "selected_platforms=All\n";
+
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        SDL_Log("[config] WARNING: could not create default '%s'", path);
+        return;
+    }
+    fwrite(DEFAULT_CONTENT, 1, sizeof(DEFAULT_CONTENT) - 1, f);
+    fclose(f);
+    SDL_Log("[config] Created default '%s'", path);
+}
+
 void config_load(const char *path, AppConfig *out) {
     out->width = CONFIG_DEFAULT_WIDTH;
     out->height = CONFIG_DEFAULT_HEIGHT;
     out->refresh_rate = CONFIG_DEFAULT_REFRESH;
+    out->screensaver_timeout_ms = CONFIG_DEFAULT_SCREENSAVER_TIMEOUT_MS;
     out->toggle_hotkey = CONFIG_DEFAULT_HOTKEY;
     out->nav_repeat_delay_ms = CONFIG_DEFAULT_NAV_REPEAT_DELAY_MS;
     out->nav_repeat_interval_ms = CONFIG_DEFAULT_NAV_REPEAT_INTERVAL_MS;
@@ -248,83 +302,103 @@ void config_load(const char *path, AppConfig *out) {
     out->launchbox_dir[0] = '\0';
     snprintf(out->selected_platforms, sizeof(out->selected_platforms), "All");
 
+    /* Tracked separately from `f` itself -- used below to decide whether
+       to write a fresh default file, after the parse loop has already
+       closed and NULLed anything it opened. */
+    SDL_bool file_found = SDL_TRUE;
+
     FILE *f = fopen(path, "r");
     if (!f) {
-        SDL_Log("[config] Could not open '%s' (using built-in defaults: %dx%d@%dHz, hotkey=%s)",
-                path, out->width, out->height, out->refresh_rate,
-                SDL_GetKeyName(out->toggle_hotkey));
-        return;
-    }
+        file_found = SDL_FALSE;
+        /* Deliberately NOT an early return here anymore -- it used to be,
+           which skipped every step below including the sibling-folder
+           launchbox_dir auto-detect a few lines down. That meant a truly
+           bare install (no config.ini at all, e.g. only crt_launcher.exe
+           copied somewhere) could never show any games even with
+           LaunchBox sitting right there as a sibling folder, since
+           auto-detection never got a chance to run. Falling through to
+           the same validation/auto-detect/logging every real config.ini
+           load goes through fixes that for this run; the missing file
+           itself gets created further down. */
+        SDL_Log("[config] '%s' not found -- using built-in defaults for now", path);
+    } else {
+        char line[CONFIG_MAX_LINE];
+        char section[CONFIG_MAX_SECTION] = "";
 
-    char line[CONFIG_MAX_LINE];
-    char section[CONFIG_MAX_SECTION] = "";
+        while (fgets(line, sizeof(line), f)) {
+            char *s = trim(line);
 
-    while (fgets(line, sizeof(line), f)) {
-        char *s = trim(line);
-
-        if (*s == '\0' || *s == ';' || *s == '#') {
-            continue; /* blank line or comment */
-        }
-
-        if (*s == '[') {
-            char *close = strchr(s, ']');
-            if (close) {
-                *close = '\0';
-                snprintf(section, sizeof(section), "%s", s + 1);
+            if (*s == '\0' || *s == ';' || *s == '#') {
+                continue; /* blank line or comment */
             }
-            continue;
-        }
 
-        char *eq = strchr(s, '=');
-        if (!eq) {
-            continue; /* not a key=value line, ignore */
-        }
-        *eq = '\0';
-        char *key = trim(s);
-        char *value = trim(eq + 1);
-        if (*key == '\0') {
-            continue;
-        }
+            if (*s == '[') {
+                char *close = strchr(s, ']');
+                if (close) {
+                    *close = '\0';
+                    snprintf(section, sizeof(section), "%s", s + 1);
+                }
+                continue;
+            }
 
-        if (strcmp(section, "display") == 0) {
-            if (strcmp(key, "width") == 0) {
-                out->width = atoi(value);
-            } else if (strcmp(key, "height") == 0) {
-                out->height = atoi(value);
-            } else if (strcmp(key, "refresh_rate") == 0) {
-                out->refresh_rate = atoi(value);
+            char *eq = strchr(s, '=');
+            if (!eq) {
+                continue; /* not a key=value line, ignore */
             }
-        } else if (strcmp(section, "input") == 0) {
-            if (strcmp(key, "toggle_hotkey") == 0) {
-                out->toggle_hotkey = parse_hotkey(value);
-            } else if (strcmp(key, "nav_repeat_delay_ms") == 0) {
-                out->nav_repeat_delay_ms = atoi(value);
-            } else if (strcmp(key, "nav_repeat_interval_ms") == 0) {
-                out->nav_repeat_interval_ms = atoi(value);
+            *eq = '\0';
+            char *key = trim(s);
+            char *value = trim(eq + 1);
+            if (*key == '\0') {
+                continue;
             }
-        } else if (strcmp(section, "bindings") == 0) {
-            for (int a = 0; a < INPUT_ACTION_COUNT; a++) {
-                if (strcmp(key, INPUT_ACTION_CONFIG_KEYS[a]) == 0) {
-                    InputBinding parsed = parse_input_binding(value);
-                    if (parsed.type != INPUT_BINDING_NONE) {
-                        out->bindings[a] = parsed;
-                        out->bindings_calibrated = SDL_TRUE;
-                    } else {
-                        SDL_Log("[config] Unrecognized binding '%s' for '%s', keeping default", value, key);
+
+            if (strcmp(section, "display") == 0) {
+                if (strcmp(key, "width") == 0) {
+                    out->width = atoi(value);
+                } else if (strcmp(key, "height") == 0) {
+                    out->height = atoi(value);
+                } else if (strcmp(key, "refresh_rate") == 0) {
+                    out->refresh_rate = atoi(value);
+                } else if (strcmp(key, "screensaver_timeout_seconds") == 0) {
+                    /* config.ini expresses this in whole seconds -- friendlier
+                       to hand-edit than milliseconds for a value nobody needs
+                       sub-second precision on -- converted to ms here since
+                       that's what SDL_GetTicks()-based timing in main.c
+                       actually compares against. */
+                    out->screensaver_timeout_ms = atoi(value) * 1000;
+                }
+            } else if (strcmp(section, "input") == 0) {
+                if (strcmp(key, "toggle_hotkey") == 0) {
+                    out->toggle_hotkey = parse_hotkey(value);
+                } else if (strcmp(key, "nav_repeat_delay_ms") == 0) {
+                    out->nav_repeat_delay_ms = atoi(value);
+                } else if (strcmp(key, "nav_repeat_interval_ms") == 0) {
+                    out->nav_repeat_interval_ms = atoi(value);
+                }
+            } else if (strcmp(section, "bindings") == 0) {
+                for (int a = 0; a < INPUT_ACTION_COUNT; a++) {
+                    if (strcmp(key, INPUT_ACTION_CONFIG_KEYS[a]) == 0) {
+                        InputBinding parsed = parse_input_binding(value);
+                        if (parsed.type != INPUT_BINDING_NONE) {
+                            out->bindings[a] = parsed;
+                            out->bindings_calibrated = SDL_TRUE;
+                        } else {
+                            SDL_Log("[config] Unrecognized binding '%s' for '%s', keeping default", value, key);
+                        }
+                        break;
                     }
-                    break;
+                }
+            } else if (strcmp(section, "launchbox") == 0) {
+                if (strcmp(key, "launchbox_dir") == 0) {
+                    snprintf(out->launchbox_dir, sizeof(out->launchbox_dir), "%s", value);
+                } else if (strcmp(key, "selected_platforms") == 0) {
+                    snprintf(out->selected_platforms, sizeof(out->selected_platforms), "%s", value);
                 }
             }
-        } else if (strcmp(section, "launchbox") == 0) {
-            if (strcmp(key, "launchbox_dir") == 0) {
-                snprintf(out->launchbox_dir, sizeof(out->launchbox_dir), "%s", value);
-            } else if (strcmp(key, "selected_platforms") == 0) {
-                snprintf(out->selected_platforms, sizeof(out->selected_platforms), "%s", value);
-            }
         }
-    }
 
-    fclose(f);
+        fclose(f);
+    }
 
     if (out->width <= 0 || out->height <= 0) {
         SDL_Log("[config] Invalid width/height in '%s', falling back to %dx%d",
@@ -334,6 +408,9 @@ void config_load(const char *path, AppConfig *out) {
     }
     if (out->refresh_rate < 0) {
         out->refresh_rate = 0;
+    }
+    if (out->screensaver_timeout_ms < 0) {
+        out->screensaver_timeout_ms = CONFIG_DEFAULT_SCREENSAVER_TIMEOUT_MS;
     }
     if (out->nav_repeat_delay_ms < 0) {
         out->nav_repeat_delay_ms = CONFIG_DEFAULT_NAV_REPEAT_DELAY_MS;
@@ -353,10 +430,15 @@ void config_load(const char *path, AppConfig *out) {
     }
 #endif
 
+    if (!file_found) {
+        config_write_default_file(path);
+    }
+
     SDL_Log("[config] Loaded '%s': low-res mode = %dx%d@%dHz, toggle hotkey = %s, "
-            "nav repeat = %dms delay / %dms interval",
+            "nav repeat = %dms delay / %dms interval, screensaver timeout = %dms%s",
             path, out->width, out->height, out->refresh_rate,
-            SDL_GetKeyName(out->toggle_hotkey), out->nav_repeat_delay_ms, out->nav_repeat_interval_ms);
+            SDL_GetKeyName(out->toggle_hotkey), out->nav_repeat_delay_ms, out->nav_repeat_interval_ms,
+            out->screensaver_timeout_ms, out->screensaver_timeout_ms > 0 ? "" : " (disabled)");
     SDL_Log("[config] LaunchBox dir = %s",
             out->launchbox_dir[0] ? out->launchbox_dir : "(not configured)");
     SDL_Log("[config] selected_platforms = %s", out->selected_platforms);

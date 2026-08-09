@@ -356,11 +356,18 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
 }
 
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
-                   const LaunchboxInfo *lb, GameListState *gl) {
+                   const LaunchboxInfo *lb, GameListState *gl, SDL_bool screensaver_active) {
     SDL_Renderer *renderer = rc->renderer;
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
+
+    if (screensaver_active) {
+        /* Nothing else drawn at all -- not even the checkerboard -- so a
+           static bright pattern can't sit on screen indefinitely. */
+        SDL_RenderPresent(renderer);
+        return;
+    }
 
     draw_checkerboard(renderer, dc->width, dc->height);
 

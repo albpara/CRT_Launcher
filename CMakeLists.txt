@@ -10,12 +10,16 @@ endif()
 
 # OFF (default): a normal console-subsystem exe -- the terminal that opens
 # alongside it is where SDL_Log's output goes, handy while developing.
-# ON: a WINDOWS-subsystem exe -- Windows never creates a console for it at
-# all, so there's nothing to see and no startup flash either, but SDL_Log
-# has nowhere to write to. Build a separate directory with this ON (e.g.
-# `cmake -B build-noconsole -DCRT_LAUNCHER_NO_CONSOLE=ON`) for real cabinet
-# deployment once you're done watching the log; keep the default OFF build
-# for day-to-day development.
+# Dynamically linked against SDL2 (SDL2.dll copied next to the exe) since
+# that keeps rebuilds, which happen constantly in this mode, fast.
+# ON: the distribution/deployment build -- a WINDOWS-subsystem exe (no
+# console ever, not even hidden, so no startup flash and SDL_Log has
+# nowhere to write to) that also statically links SDL2 into the exe
+# itself, so there's no SDL2.dll to keep track of: just crt_launcher.exe
+# plus config.ini. Build a separate directory with this ON (e.g.
+# `cmake -B build-noconsole -DCRT_LAUNCHER_NO_CONSOLE=ON`) once you're
+# done watching the log and ready to copy the result to the cabinet; keep
+# the default OFF build for day-to-day development.
 option(CRT_LAUNCHER_NO_CONSOLE "Build as a WINDOWS-subsystem exe with no console window at all" OFF)
 
 add_executable(crt_launcher
@@ -64,18 +68,35 @@ find_package(SDL2 CONFIG QUIET)
 if (TARGET SDL2::SDL2)
     # SDL2main must be linked before SDL2 -- it calls into SDL2 and GNU ld
     # resolves symbols left-to-right, so the reverse order fails to link
-    # under MinGW even though it's harmless under MSVC.
+    # under MinGW even though it's harmless under MSVC. SDL2main is always
+    # a small static wrapper (just calls the real main from WinMain) --
+    # the same target either way, static or dynamic SDL2 proper.
     if (TARGET SDL2::SDL2main)
         target_link_libraries(crt_launcher PRIVATE SDL2::SDL2main)
     endif()
-    target_link_libraries(crt_launcher PRIVATE SDL2::SDL2)
 
-    if (WIN32)
-        # Drop SDL2.dll next to the exe so the build is runnable in-place.
-        add_custom_command(TARGET crt_launcher POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:SDL2::SDL2>" "$<TARGET_FILE_DIR:crt_launcher>"
-        )
+    if (CRT_LAUNCHER_NO_CONSOLE AND TARGET SDL2::SDL2-static)
+        # The no-console build doubles as the distribution/deployment
+        # build (see the option's own comment above) -- statically link
+        # SDL2 into the exe itself so there's no SDL2.dll to keep
+        # alongside it when copying to the cabinet, just the one file.
+        # SDL2-static's own CMake target already declares every Win32 lib
+        # it needs (user32, gdi32, winmm, ...) via INTERFACE_LINK_LIBRARIES,
+        # so nothing else has to be listed here. The dev build (default,
+        # console-subsystem) stays dynamically linked -- rebuilding it on
+        # every source change is far more frequent, and dynamic linking
+        # keeps that fast.
+        target_link_libraries(crt_launcher PRIVATE SDL2::SDL2-static)
+    else()
+        target_link_libraries(crt_launcher PRIVATE SDL2::SDL2)
+
+        if (WIN32)
+            # Drop SDL2.dll next to the exe so the build is runnable in-place.
+            add_custom_command(TARGET crt_launcher POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:SDL2::SDL2>" "$<TARGET_FILE_DIR:crt_launcher>"
+            )
+        endif()
     endif()
 else()
     # Fallback for MinGW / manually-installed SDL2 dev packages that only

@@ -172,9 +172,12 @@ static SDL_bool action_is_held(InputAction action, const AppConfig *cfg, const U
    frame. Without this, e.g. cancelling with Escape -- which is both the
    calibration-cancel key AND BACK's hardcoded fallback -- immediately
    re-fired BACK on the very next frame and quit the whole app, which is
-   what was being seen as "Esc crashes during calibration". Worst case if
-   the key already happens to be released by then, this just costs one
-   extra frame before a genuinely new press registers -- harmless. */
+   what was being seen as "Esc crashes during calibration". Also reused
+   when the screensaver wakes up, for the same reason: the press that
+   dismisses it shouldn't ALSO fire SELECT/BACK on the list underneath.
+   Worst case if the key already happens to be released by then, this just
+   costs one extra frame before a genuinely new press registers --
+   harmless. */
 static void prime_edges_held(EdgeState *select_edge, EdgeState *back_edge) {
     select_edge->held = SDL_TRUE;
     back_edge->held = SDL_TRUE;
@@ -297,6 +300,15 @@ int main(int argc, char *argv[]) {
     EdgeState select_edge = {0};
     EdgeState back_edge = {0};
 
+    /* CRT burn-in protection -- see AppConfig.screensaver_timeout_ms and
+       render_frame(). last_activity_time is reset to `now` whenever any
+       mapped action is currently held (checked every frame below), so it
+       always reflects "how long since the cabinet was last touched",
+       across whatever mix of navigating/launching/sitting idle actually
+       happened -- not just since the app started. */
+    Uint32 last_activity_time = SDL_GetTicks();
+    SDL_bool screensaver_active = SDL_FALSE;
+
     SDL_bool calibrating = SDL_FALSE;
     SDL_bool calibration_done_message = SDL_FALSE;
     int calibrate_step = 0;
@@ -340,6 +352,45 @@ int main(int argc, char *argv[]) {
                    to track index-to-slot bookkeeping ourselves. Handled
                    whether or not calibration is in progress. */
                 open_all_joysticks(joysticks);
+                continue;
+            }
+
+            /* Whether this event counts as "the cabinet is being used" for
+               screensaver idle-tracking -- checked against the raw event
+               itself, not through action_is_held()/calibrated bindings.
+               That matters here specifically: during calibration there
+               are no real bindings yet to check against (cfg->bindings
+               only gets overwritten once calibration fully finishes), and
+               a joystick-only cabinet -- the exact case calibration
+               exists for -- has no keyboard fallback to fall back on
+               either, so action_is_held() alone can't see joystick
+               activity while uncalibrated. Refreshed unconditionally
+               (not just while screensaver_active) so an actively ongoing
+               calibration session -- real button presses arrive as
+               discrete events here, not as continuous "held" state --
+               doesn't get interrupted by the screensaver mid-session on
+               top of gating the wake-vs-capture handling just below. */
+            SDL_bool is_activity_event =
+                (event.type == SDL_KEYDOWN && !event.key.repeat) ||
+                event.type == SDL_JOYBUTTONDOWN ||
+                (event.type == SDL_JOYHATMOTION && event.jhat.value != SDL_HAT_CENTERED) ||
+                (event.type == SDL_JOYAXISMOTION &&
+                 (event.jaxis.value > JOYSTICK_AXIS_THRESHOLD || event.jaxis.value < -JOYSTICK_AXIS_THRESHOLD));
+            if (is_activity_event) {
+                last_activity_time = SDL_GetTicks();
+            }
+
+            if (screensaver_active) {
+                if (is_activity_event) {
+                    SDL_Log("[main] Screensaver dismissed");
+                    screensaver_active = SDL_FALSE;
+                    prime_edges_held(&select_edge, &back_edge);
+                }
+                /* Swallowed either way -- calibration capture and the
+                   toggle hotkey below both stay untouched by whatever
+                   event just arrived, so the same press that wakes the
+                   screen back up can't ALSO complete a calibration step
+                   or flip the display resolution. */
             } else if (calibrating) {
                 /* While calibrating, the next qualifying raw input IS the
                    binding for the current step -- Escape is the one
@@ -413,161 +464,201 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* Navigation repeat and SELECT/BACK are driven here, once per
-           frame, against whatever's bound -- not tied to SDL_KEYDOWN at
-           all, so the same code path drives keyboard and joystick
-           identically. Suppressed entirely while calibrating (the modal
-           has nothing to navigate, and a bound key/button firing here
-           while ALSO being captured above would be confusing). */
-        if (!calibrating) {
+        /* Screensaver idle-tracking (below) always runs, calibrating or
+           not -- it used to be nested inside the "not calibrating" guard
+           that navigation/SELECT/BACK still are, which meant the screen
+           could never blank while an uncalibrated cabinet sat on the
+           auto-started calibration prompt: exactly the static-bright-
+           image scenario the screensaver exists to prevent. Navigation
+           repeat and SELECT/BACK themselves are still driven here once
+           per frame against whatever's bound -- not tied to SDL_KEYDOWN
+           at all, so the same code path drives keyboard and joystick
+           identically -- but stay gated further down to skip entirely
+           while calibrating (the modal has nothing to navigate, and a
+           bound key/button firing here while ALSO being captured above
+           would be confusing) or while the screensaver's up (nothing
+           underneath should react until it's dismissed). */
+        {
             const Uint8 *keys = SDL_GetKeyboardState(NULL);
             Uint32 now = SDL_GetTicks();
 
-            if (key_repeat_tick(&nav_up, action_is_held(INPUT_ACTION_UP, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS),
-                                 now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
-                gamelist_move(&gamelist, &launchbox, -1);
-            }
-            if (key_repeat_tick(&nav_down, action_is_held(INPUT_ACTION_DOWN, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS),
-                                 now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
-                gamelist_move(&gamelist, &launchbox, 1);
-            }
-            if (key_repeat_tick(&nav_left, action_is_held(INPUT_ACTION_LEFT, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS),
-                                 now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
-                gamelist_jump_letter(&gamelist, &launchbox, -1);
-            }
-            if (key_repeat_tick(&nav_right, action_is_held(INPUT_ACTION_RIGHT, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS),
-                                 now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
-                gamelist_jump_letter(&gamelist, &launchbox, 1);
-            }
+            /* Computed once and reused both for the actual nav/select/back
+               dispatch below and for screensaver idle-tracking, instead of
+               calling action_is_held() twice for the same action. */
+            SDL_bool up_held = action_is_held(INPUT_ACTION_UP, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
+            SDL_bool down_held = action_is_held(INPUT_ACTION_DOWN, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
+            SDL_bool left_held = action_is_held(INPUT_ACTION_LEFT, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
+            SDL_bool right_held = action_is_held(INPUT_ACTION_RIGHT, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
+            SDL_bool select_held = action_is_held(INPUT_ACTION_SELECT, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
+            SDL_bool back_held = action_is_held(INPUT_ACTION_BACK, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
+            SDL_bool modifier_held = action_is_held(INPUT_ACTION_MODIFIER, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
+            SDL_bool any_action_held = up_held || down_held || left_held || right_held ||
+                                        select_held || back_held || modifier_held;
 
-            SDL_bool select_pressed = edge_tick(&select_edge,
-                action_is_held(INPUT_ACTION_SELECT, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS));
-            SDL_bool back_pressed = edge_tick(&back_edge,
-                action_is_held(INPUT_ACTION_BACK, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS));
-            SDL_bool modifier_held =
-                action_is_held(INPUT_ACTION_MODIFIER, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
-
-            if (calibration_done_message) {
-                /* The "find me at the top of the list" message left up by
-                   calibrate_capture() -- either action just dismisses it,
-                   deliberately not distinguishing SELECT/BACK here so
-                   whichever one the user just calibrated works. Nothing
-                   else (navigation, launching) is live while this is up. */
-                if (select_pressed || back_pressed) {
-                    calibration_done_message = SDL_FALSE;
-                    gamelist.system_modal_open = SDL_FALSE;
+            if (screensaver_active) {
+                if (any_action_held) {
+                    SDL_Log("[main] Screensaver dismissed");
+                    screensaver_active = SDL_FALSE;
+                    last_activity_time = now;
+                    /* The press that just woke the screen shouldn't ALSO
+                       act on the list underneath -- e.g. SELECT waking it
+                       immediately launching whatever game was selected.
+                       Same reasoning as prime_edges_held's other use, see
+                       its own comment. */
+                    prime_edges_held(&select_edge, &back_edge);
                 }
-            } else if (gamelist.exit_confirm_open) {
-                /* SELECT confirms (actually quit); BACK backs out to the
-                   list without quitting. Nothing else is live while this
-                   is up (see the gamelist.c guards on exit_confirm_open). */
-                if (select_pressed) {
-                    running = SDL_FALSE;
-                } else if (back_pressed) {
-                    gamelist.exit_confirm_open = SDL_FALSE;
-                }
+                /* Nothing else is live while blanked -- no navigation, no
+                   select/back dispatch -- until a frame with input wakes
+                   it (handled above; this frame still renders black). */
             } else {
-                /* select_pressed and back_pressed are handled as mutually
-                   exclusive within a single frame (else if, not two plain
-                   ifs) -- both firing on the same frame is a real
-                   possibility (a controller chord, or SELECT/BACK sharing
-                   a fallback key with something else) and used to corrupt
-                   state: e.g. SELECT starting calibration (setting
-                   calibrating=TRUE, system_modal_open=TRUE) immediately
-                   followed by BACK's still-stale system_modal_open check
-                   closing the modal right back -- leaving calibration
-                   silently running with nothing on screen to show it. If
-                   both are pressed together now, only SELECT's action
-                   fires this frame; BACK just waits for a frame where it's
-                   pressed alone. */
-                if (select_pressed) {
-                    if (gamelist_selected_is_system(&gamelist)) {
-                        if (gamelist.selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
-                            /* Immediate toggle, no modal -- matches the
-                               platform checkboxes below, not the
-                               calibration flow. Nothing to persist to
-                               config.ini either; the registry itself is
-                               the only source of truth (see startup.h). */
-                            if (startup_is_enabled()) {
-                                startup_disable();
-                            } else {
-                                startup_enable();
-                            }
-                        } else {
-                            SDL_Log("[main] Starting calibration");
-                            calibrating = SDL_TRUE;
-                            calibrate_step = 0;
-                            axis_needs_release = SDL_FALSE;
-                            memset(calibrate_bindings, 0, sizeof(calibrate_bindings));
-                            gamelist.system_modal_open = SDL_TRUE;
-                            snprintf(gamelist.system_modal_status, sizeof(gamelist.system_modal_status),
-                                     "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[0]);
-                            snprintf(gamelist.system_modal_hint, sizeof(gamelist.system_modal_hint),
-                                     "ESC WILL EXIT CALIBRATION");
-                        }
-                    } else if (gamelist_selected_is_platform(&gamelist, &launchbox)) {
-                        int idx = gamelist_selected_platform_index(&gamelist);
-                        gamelist_toggle_platform(&gamelist, &launchbox, idx);
+                if (any_action_held) {
+                    last_activity_time = now;
+                } else if (cfg.screensaver_timeout_ms > 0 &&
+                           (now - last_activity_time) >= (Uint32)cfg.screensaver_timeout_ms) {
+                    SDL_Log("[main] Screensaver activated after %dms idle", cfg.screensaver_timeout_ms);
+                    screensaver_active = SDL_TRUE;
+                }
+            }
 
-                        char csv[CONFIG_SELECTED_PLATFORMS_MAX];
-                        gamelist_format_platform_selection(&gamelist, &launchbox, csv, sizeof(csv));
-                        config_save_selected_platforms(config_path, csv);
+            if (!calibrating && !screensaver_active) {
+                if (key_repeat_tick(&nav_up, up_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                    gamelist_move(&gamelist, &launchbox, -1);
+                }
+                if (key_repeat_tick(&nav_down, down_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                    gamelist_move(&gamelist, &launchbox, 1);
+                }
+                if (key_repeat_tick(&nav_left, left_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                    gamelist_jump_letter(&gamelist, &launchbox, -1);
+                }
+                if (key_repeat_tick(&nav_right, right_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
+                    gamelist_jump_letter(&gamelist, &launchbox, 1);
+                }
 
-                        SDL_Log("[main] Platform '%s' %s", launchbox.platform_names[idx],
-                                (gamelist.platform_selected && gamelist.platform_selected[idx]) ? "enabled" : "disabled");
-                    } else {
-                        const LaunchboxGameGroup *grp = gamelist_selected_group(&gamelist, &launchbox);
-                        if (grp) {
-                            if (modifier_held) {
-                                gamelist_toggle_expand(&gamelist, &launchbox);
-                            } else {
-                                /* Modal closed (selected_version == -1): launch the default
-                                   version -- versions[version_start] is always the game's own
-                                   primary <Game> entry, guaranteed by compare_raw_games's
-                                   primary-first sort tier, not just whichever version happens
-                                   to sort first alphabetically. Modal open: launch whichever
-                                   version is focused in it. */
-                                int version_index = (gamelist.selected_version >= 0) ? gamelist.selected_version : 0;
-                                const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
+                SDL_bool select_pressed = edge_tick(&select_edge, select_held);
+                SDL_bool back_pressed = edge_tick(&back_edge, back_held);
 
-                                if (grp->version_count > 1 && gamelist.selected_version < 0) {
-                                    SDL_Log("[main] Launching default version of '%s' (MODIFIER+SELECT to pick another)",
-                                            grp->title);
-                                } else {
-                                    SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
-                                }
-
-                                if (!launcher_launch(&launcher, ver)) {
-                                    SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
-                                }
-
-                                /* Close the version-picker modal if launching from
-                                   within it -- without this, selected_version stayed
-                                   >= 0 after the launch, so the app was still
-                                   logically "inside" the modal (and would keep
-                                   showing it) the whole time the game was running
-                                   and after returning from it. */
-                                gamelist.selected_version = -1;
-                            }
-                        }
-                    }
-                } else if (back_pressed) {
-                    if (gamelist.selected_version >= 0) {
-                        gamelist_toggle_expand(&gamelist, &launchbox); /* close the version modal first */
-                    } else if (gamelist.system_modal_open) {
+                if (calibration_done_message) {
+                    /* The "find me at the top of the list" message left up by
+                       calibrate_capture() -- either action just dismisses it,
+                       deliberately not distinguishing SELECT/BACK here so
+                       whichever one the user just calibrated works. Nothing
+                       else (navigation, launching) is live while this is up. */
+                    if (select_pressed || back_pressed) {
+                        calibration_done_message = SDL_FALSE;
                         gamelist.system_modal_open = SDL_FALSE;
-                    } else {
-                        /* Top level of the main list -- ask for
-                           confirmation rather than quitting immediately,
-                           since BACK is now reachable from a controller
-                           button that's easy to bump by accident. */
-                        gamelist.exit_confirm_open = SDL_TRUE;
+                    }
+                } else if (gamelist.exit_confirm_open) {
+                    /* SELECT confirms (actually quit); BACK backs out to the
+                       list without quitting. Nothing else is live while this
+                       is up (see the gamelist.c guards on exit_confirm_open). */
+                    if (select_pressed) {
+                        running = SDL_FALSE;
+                    } else if (back_pressed) {
+                        gamelist.exit_confirm_open = SDL_FALSE;
+                    }
+                } else {
+                    /* select_pressed and back_pressed are handled as mutually
+                       exclusive within a single frame (else if, not two plain
+                       ifs) -- both firing on the same frame is a real
+                       possibility (a controller chord, or SELECT/BACK sharing
+                       a fallback key with something else) and used to corrupt
+                       state: e.g. SELECT starting calibration (setting
+                       calibrating=TRUE, system_modal_open=TRUE) immediately
+                       followed by BACK's still-stale system_modal_open check
+                       closing the modal right back -- leaving calibration
+                       silently running with nothing on screen to show it. If
+                       both are pressed together now, only SELECT's action
+                       fires this frame; BACK just waits for a frame where it's
+                       pressed alone. */
+                    if (select_pressed) {
+                        if (gamelist_selected_is_system(&gamelist)) {
+                            if (gamelist.selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
+                                /* Immediate toggle, no modal -- matches the
+                                   platform checkboxes below, not the
+                                   calibration flow. Nothing to persist to
+                                   config.ini either; the registry itself is
+                                   the only source of truth (see startup.h). */
+                                if (startup_is_enabled()) {
+                                    startup_disable();
+                                } else {
+                                    startup_enable();
+                                }
+                            } else {
+                                SDL_Log("[main] Starting calibration");
+                                calibrating = SDL_TRUE;
+                                calibrate_step = 0;
+                                axis_needs_release = SDL_FALSE;
+                                memset(calibrate_bindings, 0, sizeof(calibrate_bindings));
+                                gamelist.system_modal_open = SDL_TRUE;
+                                snprintf(gamelist.system_modal_status, sizeof(gamelist.system_modal_status),
+                                         "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[0]);
+                                snprintf(gamelist.system_modal_hint, sizeof(gamelist.system_modal_hint),
+                                         "ESC WILL EXIT CALIBRATION");
+                            }
+                        } else if (gamelist_selected_is_platform(&gamelist, &launchbox)) {
+                            int idx = gamelist_selected_platform_index(&gamelist);
+                            gamelist_toggle_platform(&gamelist, &launchbox, idx);
+
+                            char csv[CONFIG_SELECTED_PLATFORMS_MAX];
+                            gamelist_format_platform_selection(&gamelist, &launchbox, csv, sizeof(csv));
+                            config_save_selected_platforms(config_path, csv);
+
+                            SDL_Log("[main] Platform '%s' %s", launchbox.platform_names[idx],
+                                    (gamelist.platform_selected && gamelist.platform_selected[idx]) ? "enabled" : "disabled");
+                        } else {
+                            const LaunchboxGameGroup *grp = gamelist_selected_group(&gamelist, &launchbox);
+                            if (grp) {
+                                if (modifier_held) {
+                                    gamelist_toggle_expand(&gamelist, &launchbox);
+                                } else {
+                                    /* Modal closed (selected_version == -1): launch the default
+                                       version -- versions[version_start] is always the game's own
+                                       primary <Game> entry, guaranteed by compare_raw_games's
+                                       primary-first sort tier, not just whichever version happens
+                                       to sort first alphabetically. Modal open: launch whichever
+                                       version is focused in it. */
+                                    int version_index = (gamelist.selected_version >= 0) ? gamelist.selected_version : 0;
+                                    const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
+
+                                    if (grp->version_count > 1 && gamelist.selected_version < 0) {
+                                        SDL_Log("[main] Launching default version of '%s' (MODIFIER+SELECT to pick another)",
+                                                grp->title);
+                                    } else {
+                                        SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
+                                    }
+
+                                    if (!launcher_launch(&launcher, ver)) {
+                                        SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
+                                    }
+
+                                    /* Close the version-picker modal if launching from
+                                       within it -- without this, selected_version stayed
+                                       >= 0 after the launch, so the app was still
+                                       logically "inside" the modal (and would keep
+                                       showing it) the whole time the game was running
+                                       and after returning from it. */
+                                    gamelist.selected_version = -1;
+                                }
+                            }
+                        }
+                    } else if (back_pressed) {
+                        if (gamelist.selected_version >= 0) {
+                            gamelist_toggle_expand(&gamelist, &launchbox); /* close the version modal first */
+                        } else if (gamelist.system_modal_open) {
+                            gamelist.system_modal_open = SDL_FALSE;
+                        } else {
+                            /* Top level of the main list -- ask for
+                               confirmation rather than quitting immediately,
+                               since BACK is now reachable from a controller
+                               button that's easy to bump by accident. */
+                            gamelist.exit_confirm_open = SDL_TRUE;
+                        }
                     }
                 }
             }
         }
 
-        render_frame(&render, &display, &cfg, &launchbox, &gamelist);
+        render_frame(&render, &display, &cfg, &launchbox, &gamelist, screensaver_active);
     }
 
     SDL_Log("[main] Shutting down");
