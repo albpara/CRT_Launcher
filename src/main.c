@@ -9,7 +9,7 @@
 #include "launchbox.h"
 #include "launcher.h"
 #include "render.h"
-#include "screensaver.h"
+#include "starfield.h"
 #include "startup.h"
 
 /* Safety cap; a real cabinet has one encoder. */
@@ -243,8 +243,8 @@ int main(int argc, char *argv[]) {
        SDL_WINDOWEVENT handler. */
     Uint32 last_activity_time = SDL_GetTicks();
     SDL_bool screensaver_active = SDL_FALSE;
-    Screensaver screensaver;
-    screensaver_init(&screensaver);
+    Starfield starfield;
+    starfield_init(&starfield);
 
     SDL_bool calibrating = SDL_FALSE;
     SDL_bool calibration_done_message = SDL_FALSE;
@@ -410,7 +410,6 @@ int main(int argc, char *argv[]) {
                            (now - last_activity_time) >= (Uint32)cfg.screensaver_timeout_ms) {
                     SDL_Log("[main] Screensaver activated after %dms idle", cfg.screensaver_timeout_ms);
                     screensaver_active = SDL_TRUE;
-                    screensaver_reset(&screensaver, now);
                 }
             }
 
@@ -518,9 +517,9 @@ int main(int argc, char *argv[]) {
         }
 
         if (screensaver_active) {
-            screensaver_draw(&screensaver, render.renderer, display.width, display.height, SDL_GetTicks());
+            render_screensaver_frame(&render, &display, &starfield);
         } else {
-            render_frame(&render, &display, &cfg, &launchbox, &gamelist);
+            render_frame(&render, &display, &cfg, &launchbox, &gamelist, &starfield);
         }
     }
 
@@ -535,7 +534,7 @@ int main(int argc, char *argv[]) {
     gamelist_free(&gamelist);
     launchbox_free(&launchbox);
     launcher_free(&launcher);
-    screensaver_free(&screensaver);
+    starfield_free(&starfield);
     SDL_Quit();
     return 0;
 }

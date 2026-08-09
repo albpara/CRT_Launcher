@@ -1,4 +1,4 @@
-#include "screensaver.h"
+#include "starfield.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -14,8 +14,8 @@
 #define LFSR_HIT_VALUE 0x7800
 
 /* Scroll speeds in px/sec: sets 0-1 form the slow layer, 2-3 the fast
-   one. Hardware takes these from the game CPU; a screensaver just picks
-   something pleasant. */
+   one. Hardware takes these from the game CPU; we just pick something
+   pleasant. */
 #define SCROLL_SLOW 30.0f
 #define SCROLL_FAST 60.0f
 #define BLINK_RATE 2.0f /* toggles per second */
@@ -36,8 +36,10 @@ static void build_palette(SDL_Color *palette) {
 }
 
 /* Walks the LFSR across a `field_w` x STARFIELD_H field and records every
-   hit. Counts first so the array can be sized exactly. */
-static void generate_stars(Screensaver *s, int field_w) {
+   hit. Counts first so the array can be sized exactly. Using the live
+   window width (rather than stretching a fixed-width field) keeps the
+   hardware's per-pixel density: a wider screen just gets more field. */
+static void generate_stars(Starfield *s, int field_w) {
     free(s->stars);
     s->stars = NULL;
     s->star_count = 0;
@@ -61,7 +63,7 @@ static void generate_stars(Screensaver *s, int field_w) {
 
     StarfieldStar *stars = (StarfieldStar *)malloc((size_t)count * sizeof(StarfieldStar));
     if (!stars) {
-        SDL_Log("[screensaver] WARNING: out of memory building starfield");
+        SDL_Log("[starfield] WARNING: out of memory building starfield");
         return;
     }
 
@@ -86,39 +88,31 @@ static void generate_stars(Screensaver *s, int field_w) {
     s->star_count = n;
 }
 
-void screensaver_init(Screensaver *s) {
+void starfield_init(Starfield *s) {
     SDL_zerop(s);
     build_palette(s->palette);
 }
 
-void screensaver_free(Screensaver *s) {
+void starfield_free(Starfield *s) {
     free(s->stars);
     s->stars = NULL;
     s->star_count = 0;
     s->field_w = 0;
 }
 
-void screensaver_reset(Screensaver *s, Uint32 now_ms) {
-    s->scroll[0] = 0.0f;
-    s->scroll[1] = 0.0f;
-    s->blink_accum = 0.0f;
-    s->q3 = 0;
-    s->q4 = 0;
-    s->last_time = now_ms;
-}
-
-void screensaver_draw(Screensaver *s, SDL_Renderer *renderer, int win_w, int win_h, Uint32 now_ms) {
+void starfield_draw(Starfield *s, SDL_Renderer *renderer, int win_w, int win_h) {
     if (win_w != s->field_w) {
         generate_stars(s, win_w);
     }
 
-    /* Clamped so a long stall (returning from a game) doesn't jump the
-       field a huge distance in one frame. */
-    float dt = (float)(now_ms - s->last_time) * 0.001f;
+    /* Clamped so a stall -- first frame, or returning from a game --
+       doesn't jump the field a huge distance at once. */
+    Uint32 now = SDL_GetTicks();
+    float dt = (float)(now - s->last_time) * 0.001f;
     if (dt < 0.0f || dt > 0.05f) {
         dt = 0.05f;
     }
-    s->last_time = now_ms;
+    s->last_time = now;
 
     s->scroll[0] = fmodf(s->scroll[0] + SCROLL_SLOW * dt, (float)STARFIELD_H);
     s->scroll[1] = fmodf(s->scroll[1] + SCROLL_FAST * dt, (float)STARFIELD_H);
@@ -139,9 +133,6 @@ void screensaver_draw(Screensaver *s, SDL_Renderer *renderer, int win_w, int win
     int scroll_slow = (int)s->scroll[0];
     int scroll_fast = (int)s->scroll[1];
 
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderClear(renderer);
-
     for (int i = 0; i < s->star_count; i++) {
         const StarfieldStar *star = &s->stars[i];
         if (star->set != set_a && star->set != set_b) {
@@ -158,6 +149,4 @@ void screensaver_draw(Screensaver *s, SDL_Renderer *renderer, int win_w, int win
         SDL_SetRenderDrawColor(renderer, c->r, c->g, c->b, 255);
         SDL_RenderDrawPoint(renderer, star->x, y);
     }
-
-    SDL_RenderPresent(renderer);
 }

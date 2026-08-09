@@ -54,12 +54,19 @@ extern const char *const INPUT_ACTION_CONFIG_KEYS[INPUT_ACTION_COUNT];
    "JOYHAT 0 UP", "NONE"). */
 void input_binding_to_string(const InputBinding *b, char *out, size_t out_cap);
 
+/* What's drawn behind the game list. */
+typedef enum {
+    BACKGROUND_STARFIELD = 0,
+    BACKGROUND_CHECKERBOARD,
+} BackgroundStyle;
+
 /* Every field ends up valid -- config_load() fills in defaults for
    anything missing or unparsable. */
 typedef struct {
     int width;
     int height;
     int refresh_rate;      /* Hz; 0 = any */
+    BackgroundStyle background;
     /* Idle ms before blanking to black (CRT burn-in protection). 0
        disables. Stored in ms (matches SDL_GetTicks); config.ini's key is
        screensaver_timeout_seconds, converted on load. */

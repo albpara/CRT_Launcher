@@ -6,6 +6,7 @@
 #include "display.h"
 #include "gamelist.h"
 #include "launchbox.h"
+#include "starfield.h"
 
 typedef struct {
     SDL_Renderer *renderer;
@@ -14,12 +15,15 @@ typedef struct {
 /* Creates a nearest-neighbor renderer bound to `window`. */
 SDL_bool render_init(SDL_Window *window, RenderContext *rc);
 
-/* Draws one frame: checkerboard, title + game counter, the scrollable
-   list, and whichever modal is open. Mutates gl->scroll_offset (layout is
-   decided here). Not called while the screensaver is up -- see
-   screensaver_draw(). */
+/* Draws one frame: background (cfg->background), title + game counter,
+   the scrollable list, and whichever modal is open. Mutates
+   gl->scroll_offset (layout is decided here). `sf` is only touched for
+   the starfield background. */
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
-                   const LaunchboxInfo *lb, GameListState *gl);
+                   const LaunchboxInfo *lb, GameListState *gl, Starfield *sf);
+
+/* The screensaver frame: starfield on black, nothing else. */
+void render_screensaver_frame(RenderContext *rc, const DisplayContext *dc, Starfield *sf);
 
 /* Generic modal: dim overlay + centered box of plain strings, one
    optionally highlighted (selected_index, -1 for none). min_width_chars 0

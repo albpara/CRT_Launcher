@@ -292,14 +292,27 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
     }
 }
 
+void render_screensaver_frame(RenderContext *rc, const DisplayContext *dc, Starfield *sf) {
+    SDL_Renderer *renderer = rc->renderer;
+
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    starfield_draw(sf, renderer, dc->width, dc->height);
+    SDL_RenderPresent(renderer);
+}
+
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
-                   const LaunchboxInfo *lb, GameListState *gl) {
+                   const LaunchboxInfo *lb, GameListState *gl, Starfield *sf) {
     SDL_Renderer *renderer = rc->renderer;
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
-    draw_checkerboard(renderer, dc->width, dc->height);
+    if (cfg->background == BACKGROUND_CHECKERBOARD) {
+        draw_checkerboard(renderer, dc->width, dc->height);
+    } else {
+        starfield_draw(sf, renderer, dc->width, dc->height);
+    }
 
     char game_count_line[64];
 

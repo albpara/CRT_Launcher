@@ -249,6 +249,7 @@ void config_load(const char *path, AppConfig *out) {
     out->width = CONFIG_DEFAULT_WIDTH;
     out->height = CONFIG_DEFAULT_HEIGHT;
     out->refresh_rate = CONFIG_DEFAULT_REFRESH;
+    out->background = BACKGROUND_STARFIELD;
     out->screensaver_timeout_ms = CONFIG_DEFAULT_SCREENSAVER_TIMEOUT_MS;
     out->toggle_hotkey = CONFIG_DEFAULT_HOTKEY;
     out->nav_repeat_delay_ms = CONFIG_DEFAULT_NAV_REPEAT_DELAY_MS;
@@ -312,6 +313,14 @@ void config_load(const char *path, AppConfig *out) {
                     out->refresh_rate = atoi(value);
                 } else if (strcmp(key, "screensaver_timeout_seconds") == 0) {
                     out->screensaver_timeout_ms = atoi(value) * 1000;
+                } else if (strcmp(key, "background") == 0) {
+                    if (SDL_strcasecmp(value, "checkerboard") == 0) {
+                        out->background = BACKGROUND_CHECKERBOARD;
+                    } else if (SDL_strcasecmp(value, "starfield") == 0) {
+                        out->background = BACKGROUND_STARFIELD;
+                    } else {
+                        SDL_Log("[config] Unrecognized background '%s', keeping starfield", value);
+                    }
                 }
             } else if (strcmp(section, "input") == 0) {
                 if (strcmp(key, "toggle_hotkey") == 0) {
@@ -385,6 +394,8 @@ void config_load(const char *path, AppConfig *out) {
             path, out->width, out->height, out->refresh_rate,
             SDL_GetKeyName(out->toggle_hotkey), out->nav_repeat_delay_ms, out->nav_repeat_interval_ms,
             out->screensaver_timeout_ms, out->screensaver_timeout_ms > 0 ? "" : " (disabled)");
+    SDL_Log("[config] background = %s",
+            out->background == BACKGROUND_CHECKERBOARD ? "checkerboard" : "starfield");
     SDL_Log("[config] LaunchBox dir = %s",
             out->launchbox_dir[0] ? out->launchbox_dir : "(not configured)");
     SDL_Log("[config] selected_platforms = %s", out->selected_platforms);
