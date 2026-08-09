@@ -59,11 +59,9 @@ static InputBinding make_keyboard_binding(SDL_Keycode key) {
     return b;
 }
 
-/* Parses one [bindings] value, e.g. "KEYBOARD Left Shift", "JOYBUTTON 3",
-   "JOYHAT 0 UP", or "JOYAXIS 1 NEGATIVE". Returns an INPUT_BINDING_NONE
-   binding (rather than touching *out*) on anything unrecognized, so a
-   malformed line just leaves the action at whatever default config_load
-   already set instead of unbinding it. */
+/* Parses one [bindings] value ("KEYBOARD Left Shift", "JOYBUTTON 3",
+   "JOYHAT 0 UP", "JOYAXIS 1 NEGATIVE"). Returns INPUT_BINDING_NONE on
+   anything unrecognized so a malformed line keeps the default. */
 static InputBinding parse_input_binding(const char *value) {
     InputBinding b;
     memset(&b, 0, sizeof(b));
@@ -151,10 +149,7 @@ void input_binding_to_string(const InputBinding *b, char *out, size_t out_cap) {
 }
 
 #ifdef _WIN32
-/* SDL_TRUE if `dir\Data\Platforms` exists and is a real directory -- the
-   same check launchbox.c itself does before trusting a launchbox_dir, used
-   here too so auto-detection can't succeed on a folder that merely happens
-   to be named right. */
+/* Same "<dir>\Data\Platforms exists" check launchbox.c trusts. */
 static SDL_bool looks_like_launchbox_install(const char *dir) {
     char platforms_dir[CONFIG_LAUNCHBOX_DIR_MAX];
     snprintf(platforms_dir, sizeof(platforms_dir), "%s\\Data\\Platforms", dir);
@@ -162,20 +157,8 @@ static SDL_bool looks_like_launchbox_install(const char *dir) {
     return (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) ? SDL_TRUE : SDL_FALSE;
 }
 
-/* Resolves `out` to this exe's own containing directory (via
-   GetModuleFileNameA), no trailing separator. Deliberately NOT the
-   current working directory -- CWD depends on how the app was launched
-   and is not reliably the exe's own folder: a double-clicked shortcut
-   with an explicit "Start in" gets it right, but a plain double-click on
-   the exe, and critically a Windows-startup Run key entry (see
-   startup.c), do not -- a Run key launch in particular was observed
-   landing in something like C:\Windows\System32, which broke config.ini
-   discovery below. SDL_FALSE if GetModuleFileNameA fails or returns a
-   path with no '\' in it (both effectively "can't happen" on a real
-   Windows install, but handled rather than assumed). Shared by
-   autodetect_launchbox_dir (sibling-folder LaunchBox detection) and
-   config_resolve_default_path (this exe's own config.ini) -- both need
-   the same "where am I actually running from" answer. */
+/* Exe's own directory via GetModuleFileNameA -- NOT the CWD, which a
+   Windows-startup Run key launch sets to e.g. C:\Windows\System32. */
 static SDL_bool get_exe_directory(char *out, size_t out_cap) {
     char exe_path[CONFIG_LAUNCHBOX_DIR_MAX];
     DWORD len = GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
@@ -187,18 +170,15 @@ static SDL_bool get_exe_directory(char *out, size_t out_cap) {
     if (!last_sep) {
         return SDL_FALSE;
     }
-    *last_sep = '\0'; /* exe_path is now the exe's own directory */
+    *last_sep = '\0';
 
     snprintf(out, out_cap, "%s", exe_path);
     return SDL_TRUE;
 }
 
-/* Falls back to a LaunchBox install living as a sibling of this exe's own
-   folder (e.g. "Cabinet\CRT Launcher\crt_launcher.exe" next to
-   "Cabinet\LaunchBox\") -- a natural layout for something meant to replace
-   BigBox on the same machine. Only ever consulted when config.ini leaves
-   launchbox_dir blank, so it never overrides an explicit setting. Returns
-   SDL_TRUE and fills `out` only if a real-looking install was found. */
+/* Looks for a LaunchBox install next to the exe's own folder. Only
+   consulted when launchbox_dir is blank, so it never overrides an
+   explicit setting. */
 static SDL_bool autodetect_launchbox_dir(char *out, size_t out_cap) {
     char exe_dir[CONFIG_LAUNCHBOX_DIR_MAX];
     if (!get_exe_directory(exe_dir, sizeof(exe_dir))) {
@@ -225,31 +205,13 @@ void config_resolve_default_path(char *out, size_t out_cap) {
         return;
     }
 #endif
-    /* Non-Windows, or GetModuleFileNameA failed -- fall back to whatever
-       the process's own working directory happens to be, same as the
-       hardcoded "config.ini" this replaces. */
     snprintf(out, out_cap, "config.ini");
 }
 
-/* Writes a minimal but complete config.ini to `path` -- called from
-   config_load() when no file was found there at all, so a truly bare
-   deployment (e.g. just crt_launcher.exe copied somewhere on its own,
-   nothing else) still ends up with a real, hand-editable file after its
-   first launch instead of silently running on in-memory defaults forever
-   with no way to see or change them short of hand-authoring one from
-   scratch. Deliberately has no [bindings] section -- its absence is what
-   makes main.c drop into the calibration flow on first launch (see
-   config_load's own doc comment), exactly matching a config.ini that
-   existed but was never calibrated; config_save_bindings() fills that
-   section in for real once calibration finishes, the same as it would for
-   a hand-written file. launchbox_dir is left blank on purpose too, so
-   sibling-folder auto-detection (autodetect_launchbox_dir, just above)
-   keeps running on every future launch rather than baking in a path that
-   would go stale if the LaunchBox install ever moved. This is deliberately
-   NOT a copy of the tracked repo-root config.ini -- that file's the fully
-   documented reference for hand-editing; this is just a working bootstrap
-   for the "nothing here at all" case, kept short so the two don't have to
-   be kept in lockstep. */
+/* Minimal bootstrap config written when none exists, so a bare exe copy
+   self-heals into an editable file. [bindings] stays absent (triggers
+   first-launch calibration) and launchbox_dir blank (keeps auto-detection
+   live). Deliberately not a copy of the documented repo config.ini. */
 static void config_write_default_file(const char *path) {
     static const char DEFAULT_CONTENT[] =
         "; CRT Launcher configuration -- auto-generated because none was found\n"
@@ -302,24 +264,13 @@ void config_load(const char *path, AppConfig *out) {
     out->launchbox_dir[0] = '\0';
     snprintf(out->selected_platforms, sizeof(out->selected_platforms), "All");
 
-    /* Tracked separately from `f` itself -- used below to decide whether
-       to write a fresh default file, after the parse loop has already
-       closed and NULLed anything it opened. */
     SDL_bool file_found = SDL_TRUE;
 
     FILE *f = fopen(path, "r");
     if (!f) {
+        /* No early return: launchbox_dir auto-detection below must still
+           run, and the missing file gets created afterward. */
         file_found = SDL_FALSE;
-        /* Deliberately NOT an early return here anymore -- it used to be,
-           which skipped every step below including the sibling-folder
-           launchbox_dir auto-detect a few lines down. That meant a truly
-           bare install (no config.ini at all, e.g. only crt_launcher.exe
-           copied somewhere) could never show any games even with
-           LaunchBox sitting right there as a sibling folder, since
-           auto-detection never got a chance to run. Falling through to
-           the same validation/auto-detect/logging every real config.ini
-           load goes through fixes that for this run; the missing file
-           itself gets created further down. */
         SDL_Log("[config] '%s' not found -- using built-in defaults for now", path);
     } else {
         char line[CONFIG_MAX_LINE];
@@ -329,7 +280,7 @@ void config_load(const char *path, AppConfig *out) {
             char *s = trim(line);
 
             if (*s == '\0' || *s == ';' || *s == '#') {
-                continue; /* blank line or comment */
+                continue;
             }
 
             if (*s == '[') {
@@ -343,7 +294,7 @@ void config_load(const char *path, AppConfig *out) {
 
             char *eq = strchr(s, '=');
             if (!eq) {
-                continue; /* not a key=value line, ignore */
+                continue;
             }
             *eq = '\0';
             char *key = trim(s);
@@ -360,11 +311,6 @@ void config_load(const char *path, AppConfig *out) {
                 } else if (strcmp(key, "refresh_rate") == 0) {
                     out->refresh_rate = atoi(value);
                 } else if (strcmp(key, "screensaver_timeout_seconds") == 0) {
-                    /* config.ini expresses this in whole seconds -- friendlier
-                       to hand-edit than milliseconds for a value nobody needs
-                       sub-second precision on -- converted to ms here since
-                       that's what SDL_GetTicks()-based timing in main.c
-                       actually compares against. */
                     out->screensaver_timeout_ms = atoi(value) * 1000;
                 }
             } else if (strcmp(section, "input") == 0) {
@@ -450,28 +396,16 @@ void config_load(const char *path, AppConfig *out) {
     }
 }
 
-/* SDL_TRUE if `p` is genuinely the start of a line within `data` -- i.e.
-   either the very first byte of the file, or immediately preceded by a
-   newline -- rather than a substring match sitting in the middle of some
-   other line (a stray "[bindings]" inside a comment, "selected_platforms="
-   as part of a longer key, etc). */
+/* True at the first byte of the file or right after a newline -- rejects
+   substring matches inside other lines. */
 static SDL_bool is_line_start(const char *data, const char *p) {
     return (p == data || *(p - 1) == '\n') ? SDL_TRUE : SDL_FALSE;
 }
 
-SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPUT_ACTION_COUNT]) {
-    /* Read the existing file (if any) so everything outside [bindings] can
-       be carried over untouched -- this app's own config.ini has a lot of
-       hand-written documentation in it that a naive "regenerate from
-       AppConfig" save would destroy. Binary mode on both ends (here and
-       the write below) deliberately -- Windows' text-mode CRT translates
-       every '\n' passing through a text-mode stream into "\r\n", including
-       ones already read verbatim out of a CRLF file, which double-inserts
-       carriage returns on a read-then-write round trip. Binary mode keeps
-       bytes exactly as read/written, at the cost of this function's own
-       freshly-generated lines being LF-only even inside an otherwise CRLF
-       file -- purely cosmetic, every reader here (config_load, a text
-       editor) handles bare LF fine. */
+/* Reads `path` fully into a heap buffer (caller frees). Binary mode on
+   purpose: Windows' text-mode CRT would turn '\n' back into "\r\n" on a
+   read-modify-write round trip, doubling carriage returns. */
+static char *read_config_file(const char *path, long *out_len) {
     char *data = NULL;
     long len = 0;
     FILE *f = fopen(path, "rb");
@@ -489,6 +423,24 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
         }
         fclose(f);
     }
+    *out_len = data ? len : 0;
+    return data;
+}
+
+static SDL_bool write_config_file(const char *path, const char *data, size_t len, const char *what) {
+    FILE *out = fopen(path, "wb");
+    if (!out) {
+        SDL_Log("[config] WARNING: could not open '%s' for writing, %s not saved", path, what);
+        return SDL_FALSE;
+    }
+    fwrite(data, 1, len, out);
+    fclose(out);
+    return SDL_TRUE;
+}
+
+SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPUT_ACTION_COUNT]) {
+    long len = 0;
+    char *data = read_config_file(path, &len);
 
     char section[2048];
     int off = snprintf(section, sizeof(section),
@@ -504,11 +456,7 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
         off += snprintf(section + off, sizeof(section) - (size_t)off, "%s=%s\n", INPUT_ACTION_CONFIG_KEYS[a], value);
     }
 
-    /* Assembled entirely in memory first (config.ini is a few KB at most)
-       so the "is there a trailing blank line" check below can just look at
-       the buffer -- no seeking/reading back through a write-only stream,
-       which isn't valid. */
-    size_t result_cap = (size_t)(len > 0 ? len : 0) + strlen(section) + 16;
+    size_t result_cap = (size_t)len + strlen(section) + 16;
     char *result = (char *)malloc(result_cap);
     if (!result) {
         SDL_Log("[config] WARNING: out of memory saving '%s', calibration not saved", path);
@@ -518,10 +466,8 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
     size_t result_len = 0;
 
     if (data) {
-        /* Copy everything EXCEPT any existing "[bindings]"-headed
-           section(s) -- looping (not just handling one) so that if a prior
-           bug or hand-edit ever left more than one behind, this cleans all
-           of them up rather than adding yet another. */
+        /* Copy everything except existing [bindings] section(s) -- looping
+           so duplicates left by earlier bugs/hand-edits get cleaned up. */
         const char *p = data;
         while (*p) {
             const char *tag = strstr(p, "[bindings]");
@@ -547,7 +493,7 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
         }
     }
 
-    /* Exactly one blank line before the freshly written section. */
+    /* Exactly one blank line before the fresh section. */
     if (result_len > 0 && result[result_len - 1] != '\n') {
         result[result_len++] = '\n';
     }
@@ -557,47 +503,24 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
     memcpy(result + result_len, section, strlen(section));
     result_len += strlen(section);
 
-    FILE *out = fopen(path, "wb");
-    if (!out) {
-        SDL_Log("[config] WARNING: could not open '%s' for writing, calibration not saved", path);
-        free(data);
-        free(result);
-        return SDL_FALSE;
-    }
-    fwrite(result, 1, result_len, out);
-    fclose(out);
+    SDL_bool ok = write_config_file(path, result, result_len, "calibration");
 
     free(data);
     free(result);
-    SDL_Log("[config] Saved calibrated bindings to '%s'", path);
-    return SDL_TRUE;
+    if (ok) {
+        SDL_Log("[config] Saved calibrated bindings to '%s'", path);
+    }
+    return ok;
 }
 
 SDL_bool config_save_selected_platforms(const char *path, const char *value) {
-    /* Same binary-mode/in-memory-buffer read as config_save_bindings, for
-       the same CRLF round-trip reason -- see its comment. */
-    char *data = NULL;
     long len = 0;
-    FILE *f = fopen(path, "rb");
-    if (f) {
-        fseek(f, 0, SEEK_END);
-        len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        if (len > 0) {
-            data = (char *)malloc((size_t)len + 1);
-            if (data) {
-                size_t read = fread(data, 1, (size_t)len, f);
-                data[read] = '\0';
-                len = (long)read;
-            }
-        }
-        fclose(f);
-    }
+    char *data = read_config_file(path, &len);
 
     char new_line[CONFIG_SELECTED_PLATFORMS_MAX + 32];
     size_t line_len = (size_t)snprintf(new_line, sizeof(new_line), "selected_platforms=%s\n", value);
 
-    size_t result_cap = (size_t)(len > 0 ? len : 0) + line_len + 64;
+    size_t result_cap = (size_t)len + line_len + 64;
     char *result = (char *)malloc(result_cap);
     if (!result) {
         SDL_Log("[config] WARNING: out of memory saving '%s', platform selection not saved", path);
@@ -606,9 +529,8 @@ SDL_bool config_save_selected_platforms(const char *path, const char *value) {
     }
     size_t result_len = 0;
 
-    /* Find an existing "selected_platforms=" line to replace in place; if
-       there isn't one, find the [launchbox] header to insert right after
-       instead -- only searched for if the key itself wasn't found. */
+    /* Replace an existing selected_platforms= line in place; else insert
+       after the [launchbox] header; else append a fresh section. */
     const char *existing_key = NULL;
     const char *launchbox_header = NULL;
     if (data) {
@@ -653,9 +575,6 @@ SDL_bool config_save_selected_platforms(const char *path, const char *value) {
         memcpy(result + result_len, after_header, rest_len);
         result_len += rest_len;
     } else {
-        /* No existing key and no [launchbox] header either (an unusually
-           stripped-down config.ini) -- carry over whatever was there,
-           then append a fresh section. */
         if (data) {
             memcpy(result + result_len, data, (size_t)len);
             result_len += (size_t)len;
@@ -670,18 +589,12 @@ SDL_bool config_save_selected_platforms(const char *path, const char *value) {
         result_len += line_len;
     }
 
-    FILE *out = fopen(path, "wb");
-    if (!out) {
-        SDL_Log("[config] WARNING: could not open '%s' for writing, platform selection not saved", path);
-        free(data);
-        free(result);
-        return SDL_FALSE;
-    }
-    fwrite(result, 1, result_len, out);
-    fclose(out);
+    SDL_bool ok = write_config_file(path, result, result_len, "platform selection");
 
     free(data);
     free(result);
-    SDL_Log("[config] Saved selected_platforms=%s to '%s'", value, path);
-    return SDL_TRUE;
+    if (ok) {
+        SDL_Log("[config] Saved selected_platforms=%s to '%s'", value, path);
+    }
+    return ok;
 }

@@ -11,18 +11,11 @@
 #include "render.h"
 #include "startup.h"
 
-/* Bound for how many physical joysticks/pads we'll keep open at once --
-   comfortably above any real cabinet setup (typically one encoder), just a
-   safety cap. */
+/* Safety cap; a real cabinet has one encoder. */
 #define MAX_TRACKED_JOYSTICKS 4
 
-/* Opens every joystick currently visible to SDL (a no-op device generates
-   no button/hat events until it's actually opened). Not a real device-
-   selection step -- every open joystick is treated as one undifferentiated
-   input source (see binding_is_held) -- fine for the single-encoder
-   cabinet this was built for. See the SDL_JOYDEVICEADDED handling in the
-   main loop for how this stays current if something's plugged in after
-   launch. */
+/* Opens every visible joystick (unopened devices generate no events).
+   All open joysticks are treated as one undifferentiated input source. */
 static void open_all_joysticks(SDL_Joystick *joysticks[MAX_TRACKED_JOYSTICKS]) {
     int count = SDL_NumJoysticks();
     for (int i = 0; i < count && i < MAX_TRACKED_JOYSTICKS; i++) {
@@ -35,20 +28,14 @@ static void open_all_joysticks(SDL_Joystick *joysticks[MAX_TRACKED_JOYSTICKS]) {
     }
 }
 
-/* Tracks one action's own held/repeat timing for continuous navigation,
-   independent of the OS's keyboard repeat rate (SDL_KEYDOWN's
-   event.key.repeat just mirrors whatever Windows' Control Panel repeat
-   setting is, which isn't configurable from here, and doesn't exist at all
-   for joystick input anyway). Polled once per frame against
-   binding_is_held() instead. */
+/* Own repeat timing (config-tunable, works for joysticks) instead of the
+   OS key-repeat rate. */
 typedef struct {
     SDL_bool held;
     Uint32 next_repeat_time;
 } KeyRepeatState;
 
-/* Returns SDL_TRUE the frame(s) this direction should act: once
-   immediately on first press, then every `interval_ms` after having been
-   held for `delay_ms`. */
+/* Fires once on press, then every `interval_ms` after `delay_ms`. */
 static SDL_bool key_repeat_tick(KeyRepeatState *state, SDL_bool is_down, Uint32 now,
                                  int delay_ms, int interval_ms) {
     if (!is_down) {
@@ -67,34 +54,22 @@ static SDL_bool key_repeat_tick(KeyRepeatState *state, SDL_bool is_down, Uint32 
     return SDL_FALSE;
 }
 
-/* Tracks one action's held state for a one-shot (non-repeating) press --
-   SELECT/BACK should fire exactly once per press, not keep re-firing every
-   frame while held (that would re-launch a game or re-toggle a modal
-   continuously). */
+/* One-shot press tracking for SELECT/BACK. */
 typedef struct {
     SDL_bool held;
 } EdgeState;
 
-/* Returns SDL_TRUE only on the transition from not-held to held. */
+/* SDL_TRUE only on the not-held -> held transition. */
 static SDL_bool edge_tick(EdgeState *state, SDL_bool is_held_now) {
     SDL_bool fired = (!state->held && is_held_now) ? SDL_TRUE : SDL_FALSE;
     state->held = is_held_now;
     return fired;
 }
 
-/* Axis motion jitters near center even at rest -- only worth treating as
-   "held" once clearly past a deadzone, not on every tiny fluctuation.
-   ~25% of SDL's +-32767 axis range. Shared between runtime resolution
-   (binding_is_held) and calibration capture, so both agree on what counts
-   as a real push. */
+/* Axis deadzone (~25% of range), shared with calibration capture. */
 #define JOYSTICK_AXIS_THRESHOLD 8000
 
-/* Resolves whether `b` is currently active against this frame's keyboard
-   state and every open joystick -- source-agnostic, so the rest of main()
-   never needs to know whether a given action is bound to a key or a
-   physical pad input. Joysticks aren't disambiguated by device (see
-   open_all_joysticks) -- any open joystick matching counts, which is fine
-   for a single-encoder cabinet. */
+/* Is `b` active this frame? Any open joystick counts. */
 static SDL_bool binding_is_held(const InputBinding *b, const Uint8 *keyboard_state,
                                  SDL_Joystick *const *joysticks, int joystick_count) {
     switch (b->type) {
@@ -136,20 +111,15 @@ static SDL_bool binding_is_held(const InputBinding *b, const Uint8 *keyboard_sta
     }
 }
 
-/* Hardcoded keyboard fallback for each action -- arrows/Enter/Esc/Shift
-   always work for navigation, regardless of what's actually calibrated, so
-   a keyboard plugged into the cabinet is always a working escape hatch
-   even after calibrating for a different device entirely. Deliberately
-   NOT configurable (per explicit request) -- this is meant to be a fixed
-   safety net, not another setting to maintain. */
+/* Hardcoded keyboard fallback, always active under whatever's calibrated
+   so a plugged-in keyboard always works. Deliberately not configurable. */
 static const SDL_Scancode ACTION_FALLBACK_SCANCODE[INPUT_ACTION_COUNT] = {
     SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
     SDL_SCANCODE_RETURN, SDL_SCANCODE_ESCAPE, SDL_SCANCODE_LSHIFT,
 };
 
-/* SDL_TRUE if `action`'s calibrated binding is active, OR its hardcoded
-   keyboard fallback is -- MODIFIER also accepts the right-hand Shift key,
-   matching how most software treats "Shift" as either one. */
+/* Calibrated binding OR keyboard fallback (MODIFIER also takes right
+   Shift). */
 static SDL_bool action_is_held(InputAction action, const AppConfig *cfg, const Uint8 *keys,
                                 SDL_Joystick *const *joysticks, int joystick_count) {
     if (binding_is_held(&cfg->bindings[action], keys, joysticks, joystick_count)) {
@@ -164,34 +134,18 @@ static SDL_bool action_is_held(InputAction action, const AppConfig *cfg, const U
     return SDL_FALSE;
 }
 
-/* Marks both edge trackers as "already held" -- called at every point
-   calibration mode ends (cancelled or finished) so that whatever physical
-   key/button is *still being held* at that exact instant (it necessarily
-   is one -- that's what just ended calibration) doesn't ALSO register as a
-   fresh SELECT/BACK press the instant per-frame polling resumes next
-   frame. Without this, e.g. cancelling with Escape -- which is both the
-   calibration-cancel key AND BACK's hardcoded fallback -- immediately
-   re-fired BACK on the very next frame and quit the whole app, which is
-   what was being seen as "Esc crashes during calibration". Also reused
-   when the screensaver wakes up, for the same reason: the press that
-   dismisses it shouldn't ALSO fire SELECT/BACK on the list underneath.
-   Worst case if the key already happens to be released by then, this just
-   costs one extra frame before a genuinely new press registers --
-   harmless. */
+/* Marks both edges "already held" so the key/button that just ended
+   calibration (or woke the screensaver) can't double-fire as a fresh
+   SELECT/BACK next frame -- e.g. Escape canceling calibration used to
+   immediately re-fire BACK and quit the app. */
 static void prime_edges_held(EdgeState *select_edge, EdgeState *back_edge) {
     select_edge->held = SDL_TRUE;
     back_edge->held = SDL_TRUE;
 }
 
-/* Records `captured` as the binding for the calibration step currently in
-   progress, advances to the next action, and -- once all of them are done
-   -- commits the result into `cfg`, persists it via
-   config_save_bindings(), and leaves a dismissible "where to find this
-   again" message up (see calibration_done_message in main()) instead of
-   closing the modal immediately, since the system menu it lives under is
-   hidden by default. Shared by the three raw-event sources that can supply
-   a binding (keyboard, joystick button, joystick hat, joystick axis) so
-   the advance/finish logic isn't quadrupled. */
+/* Stores one captured binding, advances the calibration step, and on the
+   last step commits + saves the set and leaves a dismissible completion
+   message up. Shared by all four capture event types. */
 static void calibrate_capture(InputBinding captured, InputBinding *calibrate_bindings, int *calibrate_step,
                                SDL_bool *calibrating, SDL_bool *calibration_done_message,
                                EdgeState *select_edge, EdgeState *back_edge,
@@ -212,7 +166,7 @@ static void calibrate_capture(InputBinding captured, InputBinding *calibrate_bin
         prime_edges_held(select_edge, back_edge);
         snprintf(gamelist->system_modal_status, sizeof(gamelist->system_modal_status),
                  "SAVED - FIND ME AT THE TOP OF THE LIST");
-        gamelist->system_modal_hint[0] = '\0'; /* Esc has no special meaning here anymore */
+        gamelist->system_modal_hint[0] = '\0';
     } else {
         snprintf(gamelist->system_modal_status, sizeof(gamelist->system_modal_status),
                  "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[*calibrate_step]);
@@ -225,21 +179,12 @@ int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
-    /* Some Xbox-compatible pads/encoders get enumerated TWICE on Windows
-       when both the classic XInput backend and the newer HIDAPI backend
-       claim the same physical device -- when that happens, only one of the
-       two enumerations reliably reports the D-pad as a hat (the other may
-       drop it or expose it differently), which can make the hat appear to
-       just not work even though regular buttons do. Forcing the classic
-       XInput-only path avoids the double-enumeration. Must be set before
-       SDL_Init. */
+    /* Force classic XInput -- with HIDAPI/RawInput enabled too, some
+       encoders enumerate twice and the duplicate drops hat events. Must
+       precede SDL_Init. */
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "0");
     SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
 
-    /* SDL_INIT_GAMECONTROLLER implies SDL_INIT_JOYSTICK -- needed for
-       joystick bindings/calibration to see any pad/encoder at all; without
-       it no joystick events are ever generated, even for a device that's
-       physically connected. */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
         SDL_Log("[main] FATAL: SDL_Init failed: %s", SDL_GetError());
         return 1;
@@ -248,22 +193,15 @@ int main(int argc, char *argv[]) {
     SDL_Joystick *joysticks[MAX_TRACKED_JOYSTICKS] = {0};
     open_all_joysticks(joysticks);
 
-    /* Resolved from the exe's own directory, not the process's current
-       working directory -- see config_resolve_default_path()'s doc
-       comment for why that distinction matters (a Windows-startup Run key
-       launch does not preserve the exe's folder as CWD the way a
-       shortcut's "Start in" field would). Computed once and reused for
-       every config_load/config_save_* call below. */
+    /* Resolved from the exe's own directory (a Run-key launch doesn't set
+       CWD there); computed once, reused for every load/save. */
     char config_path[CONFIG_DEFAULT_PATH_MAX];
     config_resolve_default_path(config_path, sizeof(config_path));
 
     AppConfig cfg;
     config_load(config_path, &cfg);
 
-    /* Hidden whenever it's over one of this app's windows -- SDL restores
-       the normal OS cursor automatically once it leaves. There's no on-
-       screen pointer UI to click here, so it's just visual noise on the
-       cabinet. */
+    /* No pointer UI; the cursor is just noise on the cabinet. */
     SDL_ShowCursor(SDL_DISABLE);
 
     LaunchboxInfo launchbox;
@@ -288,9 +226,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    SDL_Log("[main] Entering main loop. %s toggles resolution; directions/select/back/modifier "
-            "are whatever's bound in config.ini (scroll up to CALIBRATE CONTROLS to change them); "
-            "close the window to quit.",
+    SDL_Log("[main] Entering main loop. %s toggles resolution; close the window to quit.",
             SDL_GetKeyName(cfg.toggle_hotkey));
 
     KeyRepeatState nav_up = {0};
@@ -300,12 +236,10 @@ int main(int argc, char *argv[]) {
     EdgeState select_edge = {0};
     EdgeState back_edge = {0};
 
-    /* CRT burn-in protection -- see AppConfig.screensaver_timeout_ms and
-       render_frame(). last_activity_time is reset to `now` whenever any
-       mapped action is currently held (checked every frame below), so it
-       always reflects "how long since the cabinet was last touched",
-       across whatever mix of navigating/launching/sitting idle actually
-       happened -- not just since the app started. */
+    /* CRT burn-in protection -- see AppConfig.screensaver_timeout_ms.
+       Runs regardless of focus (blanking behind a running game is
+       harmless and invisible); regaining focus wakes it, see the
+       SDL_WINDOWEVENT handler. */
     Uint32 last_activity_time = SDL_GetTicks();
     SDL_bool screensaver_active = SDL_FALSE;
 
@@ -313,20 +247,14 @@ int main(int argc, char *argv[]) {
     SDL_bool calibration_done_message = SDL_FALSE;
     int calibrate_step = 0;
     InputBinding calibrate_bindings[INPUT_ACTION_COUNT] = {0};
-    /* Unlike a button press or a hat's value change, axis motion keeps
-       firing events every tick while held past the threshold -- without
-       this, holding a direction a moment too long would capture the SAME
-       axis/direction again for the NEXT step too. Sits true from a
-       successful axis capture until an axis event reports back under the
-       threshold (the stick returning toward center), gating out further
-       axis captures in between. Reset whenever calibration (re)starts. */
+    /* Axis events keep firing while held past the threshold -- without
+       this gate one held push would capture several steps. Cleared when
+       the stick returns under the threshold. */
     SDL_bool axis_needs_release = SDL_FALSE;
 
     if (!cfg.bindings_calibrated) {
-        /* Nothing has ever been calibrated on this install (config.ini has
-           no [bindings] section) -- land directly in calibration instead
-           of the game list, since an uncalibrated cabinet has no reliable
-           way to navigate to CALIBRATE CONTROLS in the first place. */
+        /* Uncalibrated install -- start in calibration; there's no
+           reliable way to navigate to it yet. */
         SDL_Log("[main] No calibration on file -- starting calibration automatically");
         calibrating = SDL_TRUE;
         axis_needs_release = SDL_FALSE;
@@ -345,31 +273,27 @@ int main(int argc, char *argv[]) {
             if (event.type == SDL_QUIT) {
                 running = SDL_FALSE;
             } else if (event.type == SDL_JOYDEVICEADDED) {
-                /* event.jdevice.which is a device INDEX for this event
-                   specifically (unlike button/hat events, where it's an
-                   instance ID) -- open_all_joysticks() re-scans from 0, so
-                   a freshly plugged-in pad gets opened here without needing
-                   to track index-to-slot bookkeeping ourselves. Handled
-                   whether or not calibration is in progress. */
+                /* Hot-plug: re-scan opens the new device. */
                 open_all_joysticks(joysticks);
+                continue;
+            } else if (event.type == SDL_WINDOWEVENT) {
+                if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+                    /* Coming back from a launched game: wake immediately
+                       (returning to a black screen looks like a hang) and
+                       restart the idle timer. Re-hiding the cursor matters
+                       too -- the game can leave it visible over us. */
+                    screensaver_active = SDL_FALSE;
+                    last_activity_time = SDL_GetTicks();
+                    SDL_ShowCursor(SDL_DISABLE);
+                    prime_edges_held(&select_edge, &back_edge);
+                }
                 continue;
             }
 
-            /* Whether this event counts as "the cabinet is being used" for
-               screensaver idle-tracking -- checked against the raw event
-               itself, not through action_is_held()/calibrated bindings.
-               That matters here specifically: during calibration there
-               are no real bindings yet to check against (cfg->bindings
-               only gets overwritten once calibration fully finishes), and
-               a joystick-only cabinet -- the exact case calibration
-               exists for -- has no keyboard fallback to fall back on
-               either, so action_is_held() alone can't see joystick
-               activity while uncalibrated. Refreshed unconditionally
-               (not just while screensaver_active) so an actively ongoing
-               calibration session -- real button presses arrive as
-               discrete events here, not as continuous "held" state --
-               doesn't get interrupted by the screensaver mid-session on
-               top of gating the wake-vs-capture handling just below. */
+            /* Raw-event activity check for the screensaver -- calibrated
+               bindings can't be used here because during calibration none
+               exist yet, and a joystick-only cabinet has no keyboard
+               fallback either. */
             SDL_bool is_activity_event =
                 (event.type == SDL_KEYDOWN && !event.key.repeat) ||
                 event.type == SDL_JOYBUTTONDOWN ||
@@ -386,17 +310,11 @@ int main(int argc, char *argv[]) {
                     screensaver_active = SDL_FALSE;
                     prime_edges_held(&select_edge, &back_edge);
                 }
-                /* Swallowed either way -- calibration capture and the
-                   toggle hotkey below both stay untouched by whatever
-                   event just arrived, so the same press that wakes the
-                   screen back up can't ALSO complete a calibration step
-                   or flip the display resolution. */
+                /* Event swallowed either way -- the waking press must not
+                   also complete a calibration step or toggle resolution. */
             } else if (calibrating) {
-                /* While calibrating, the next qualifying raw input IS the
-                   binding for the current step -- Escape is the one
-                   reserved key, it cancels instead of being capturable (so
-                   BACK can still be bound to anything else, just not
-                   discovered via this particular key during calibration). */
+                /* The next qualifying raw input IS the binding for the
+                   current step; Escape is reserved to cancel. */
                 if (event.type == SDL_KEYDOWN && !event.key.repeat) {
                     if (event.key.keysym.sym == SDLK_ESCAPE) {
                         calibrating = SDL_FALSE;
@@ -419,12 +337,8 @@ int main(int argc, char *argv[]) {
                     calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
                                        &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
                 } else if (event.type == SDL_JOYHATMOTION) {
-                    /* Logged unconditionally (not just on a successful
-                       capture) -- if a direction still doesn't register
-                       during calibration, this line's presence or absence
-                       in the log says whether SDL is sending hat events for
-                       this device at all, which is the key fact needed to
-                       tell "wrong bit decoded" from "no event arrived". */
+                    /* Logged unconditionally so "no hat events at all" is
+                       diagnosable from the log. */
                     SDL_Log("[main] Calibration saw JOYHATMOTION: hat=%d value=%d", event.jhat.hat, event.jhat.value);
 
                     Uint8 dir = 0;
@@ -440,13 +354,9 @@ int main(int argc, char *argv[]) {
                         captured.joy_hat_direction = dir;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
                                            &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
-                    } /* SDL_HAT_CENTERED (releasing back to center) isn't a press -- ignored */
+                    }
                 } else if (event.type == SDL_JOYAXISMOTION) {
                     if (event.jaxis.value > -JOYSTICK_AXIS_THRESHOLD && event.jaxis.value < JOYSTICK_AXIS_THRESHOLD) {
-                        /* Back under the threshold -- the stick returning
-                           toward center. Not itself a capture, but this is
-                           what clears axis_needs_release so the next real
-                           push can be captured. */
                         axis_needs_release = SDL_FALSE;
                     } else if (!axis_needs_release) {
                         InputBinding captured;
@@ -457,34 +367,21 @@ int main(int argc, char *argv[]) {
                         axis_needs_release = SDL_TRUE;
                         calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
                                            &calibration_done_message, &select_edge, &back_edge, &gamelist, &cfg, config_path);
-                    } /* else: still the same held push past threshold -- already captured, ignored until release */
+                    }
                 }
             } else if (event.type == SDL_KEYDOWN && !event.key.repeat && event.key.keysym.sym == cfg.toggle_hotkey) {
                 display_toggle(&display);
             }
         }
 
-        /* Screensaver idle-tracking (below) always runs, calibrating or
-           not -- it used to be nested inside the "not calibrating" guard
-           that navigation/SELECT/BACK still are, which meant the screen
-           could never blank while an uncalibrated cabinet sat on the
-           auto-started calibration prompt: exactly the static-bright-
-           image scenario the screensaver exists to prevent. Navigation
-           repeat and SELECT/BACK themselves are still driven here once
-           per frame against whatever's bound -- not tied to SDL_KEYDOWN
-           at all, so the same code path drives keyboard and joystick
-           identically -- but stay gated further down to skip entirely
-           while calibrating (the modal has nothing to navigate, and a
-           bound key/button firing here while ALSO being captured above
-           would be confusing) or while the screensaver's up (nothing
-           underneath should react until it's dismissed). */
+        /* Per-frame input resolution. Screensaver idle-tracking always
+           runs (even during calibration -- a cabinet parked on the
+           calibration prompt must still blank); nav/SELECT/BACK dispatch
+           is gated below. */
         {
             const Uint8 *keys = SDL_GetKeyboardState(NULL);
             Uint32 now = SDL_GetTicks();
 
-            /* Computed once and reused both for the actual nav/select/back
-               dispatch below and for screensaver idle-tracking, instead of
-               calling action_is_held() twice for the same action. */
             SDL_bool up_held = action_is_held(INPUT_ACTION_UP, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
             SDL_bool down_held = action_is_held(INPUT_ACTION_DOWN, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
             SDL_bool left_held = action_is_held(INPUT_ACTION_LEFT, &cfg, keys, joysticks, MAX_TRACKED_JOYSTICKS);
@@ -500,16 +397,9 @@ int main(int argc, char *argv[]) {
                     SDL_Log("[main] Screensaver dismissed");
                     screensaver_active = SDL_FALSE;
                     last_activity_time = now;
-                    /* The press that just woke the screen shouldn't ALSO
-                       act on the list underneath -- e.g. SELECT waking it
-                       immediately launching whatever game was selected.
-                       Same reasoning as prime_edges_held's other use, see
-                       its own comment. */
+                    /* The waking press must not also act on the list. */
                     prime_edges_held(&select_edge, &back_edge);
                 }
-                /* Nothing else is live while blanked -- no navigation, no
-                   select/back dispatch -- until a frame with input wakes
-                   it (handled above; this frame still renders black). */
             } else {
                 if (any_action_held) {
                     last_activity_time = now;
@@ -538,46 +428,26 @@ int main(int argc, char *argv[]) {
                 SDL_bool back_pressed = edge_tick(&back_edge, back_held);
 
                 if (calibration_done_message) {
-                    /* The "find me at the top of the list" message left up by
-                       calibrate_capture() -- either action just dismisses it,
-                       deliberately not distinguishing SELECT/BACK here so
-                       whichever one the user just calibrated works. Nothing
-                       else (navigation, launching) is live while this is up. */
+                    /* Either action dismisses the completion message. */
                     if (select_pressed || back_pressed) {
                         calibration_done_message = SDL_FALSE;
                         gamelist.system_modal_open = SDL_FALSE;
                     }
                 } else if (gamelist.exit_confirm_open) {
-                    /* SELECT confirms (actually quit); BACK backs out to the
-                       list without quitting. Nothing else is live while this
-                       is up (see the gamelist.c guards on exit_confirm_open). */
                     if (select_pressed) {
                         running = SDL_FALSE;
                     } else if (back_pressed) {
                         gamelist.exit_confirm_open = SDL_FALSE;
                     }
                 } else {
-                    /* select_pressed and back_pressed are handled as mutually
-                       exclusive within a single frame (else if, not two plain
-                       ifs) -- both firing on the same frame is a real
-                       possibility (a controller chord, or SELECT/BACK sharing
-                       a fallback key with something else) and used to corrupt
-                       state: e.g. SELECT starting calibration (setting
-                       calibrating=TRUE, system_modal_open=TRUE) immediately
-                       followed by BACK's still-stale system_modal_open check
-                       closing the modal right back -- leaving calibration
-                       silently running with nothing on screen to show it. If
-                       both are pressed together now, only SELECT's action
-                       fires this frame; BACK just waits for a frame where it's
-                       pressed alone. */
+                    /* SELECT and BACK are mutually exclusive per frame --
+                       both firing together used to corrupt modal state
+                       (SELECT opening a modal, same-frame BACK closing it). */
                     if (select_pressed) {
                         if (gamelist_selected_is_system(&gamelist)) {
                             if (gamelist.selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
-                                /* Immediate toggle, no modal -- matches the
-                                   platform checkboxes below, not the
-                                   calibration flow. Nothing to persist to
-                                   config.ini either; the registry itself is
-                                   the only source of truth (see startup.h). */
+                                /* Immediate toggle; the registry is the only
+                                   source of truth (see startup.h). */
                                 if (startup_is_enabled()) {
                                     startup_disable();
                                 } else {
@@ -611,46 +481,31 @@ int main(int argc, char *argv[]) {
                                 if (modifier_held) {
                                     gamelist_toggle_expand(&gamelist, &launchbox);
                                 } else {
-                                    /* Modal closed (selected_version == -1): launch the default
-                                       version -- versions[version_start] is always the game's own
-                                       primary <Game> entry, guaranteed by compare_raw_games's
-                                       primary-first sort tier, not just whichever version happens
-                                       to sort first alphabetically. Modal open: launch whichever
-                                       version is focused in it. */
+                                    /* Picker closed: launch the default version
+                                       (versions[version_start] is the primary
+                                       <Game> entry). Open: launch the focused one. */
                                     int version_index = (gamelist.selected_version >= 0) ? gamelist.selected_version : 0;
                                     const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
 
-                                    if (grp->version_count > 1 && gamelist.selected_version < 0) {
-                                        SDL_Log("[main] Launching default version of '%s' (MODIFIER+SELECT to pick another)",
-                                                grp->title);
-                                    } else {
-                                        SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
-                                    }
-
+                                    SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
                                     if (!launcher_launch(&launcher, ver)) {
                                         SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
                                     }
 
-                                    /* Close the version-picker modal if launching from
-                                       within it -- without this, selected_version stayed
-                                       >= 0 after the launch, so the app was still
-                                       logically "inside" the modal (and would keep
-                                       showing it) the whole time the game was running
-                                       and after returning from it. */
+                                    /* Close the picker so the app isn't stuck
+                                       "inside" it after returning from the game. */
                                     gamelist.selected_version = -1;
                                 }
                             }
                         }
                     } else if (back_pressed) {
                         if (gamelist.selected_version >= 0) {
-                            gamelist_toggle_expand(&gamelist, &launchbox); /* close the version modal first */
+                            gamelist_toggle_expand(&gamelist, &launchbox);
                         } else if (gamelist.system_modal_open) {
                             gamelist.system_modal_open = SDL_FALSE;
                         } else {
-                            /* Top level of the main list -- ask for
-                               confirmation rather than quitting immediately,
-                               since BACK is now reachable from a controller
-                               button that's easy to bump by accident. */
+                            /* Confirm rather than quit -- BACK is easy to bump
+                               on a controller. */
                             gamelist.exit_confirm_open = SDL_TRUE;
                         }
                     }

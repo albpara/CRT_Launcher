@@ -3,23 +3,10 @@
 
 #include <stdint.h>
 
-/*
- * PLACEHOLDER FONT.
- *
- * This is a hand-authored 5x5-pixel block font, drawn glyph-by-glyph as
- * filled SDL_Rects (see render_draw_text in render.c) rather than sampled
- * from a texture. That sidesteps needing any font asset or filtering
- * settings at all for this proof-of-concept -- it is crisp by construction.
- *
- * It only covers A-Z, 0-9, space, '-', ':', '.', '(', ')', '>' --
- * enough for this POC's status text. It is NOT the eventual font pipeline: swap this out for
- * a real BMFont-style (image + glyph descriptor) bitmap font, e.g. a
- * licensed pixel font like "Press Start 2P" (SIL OFL) exported as a sprite
- * sheet, once the real UI work starts.
- *
- * Each glyph is 5 rows, each row is the low 5 bits of a byte, MSB-first
- * (bit 4 = leftmost pixel, bit 0 = rightmost pixel).
- */
+/* Placeholder hand-drawn 5x5 block font, rendered as filled rects (see
+   render.c). Covers A-Z 0-9 space - : . ( ) > ' only; swap for a real
+   bitmap-font pipeline eventually. Each glyph row is the low 5 bits of a
+   byte, bit 4 = leftmost pixel. */
 
 #define FONT_GLYPH_WIDTH  5
 #define FONT_GLYPH_HEIGHT 5
@@ -71,28 +58,15 @@ static const uint8_t FONT_LPAREN[FONT_GLYPH_HEIGHT] = {2, 4, 4, 4, 2};
 static const uint8_t FONT_RPAREN[FONT_GLYPH_HEIGHT] = {8, 4, 4, 4, 8};
 static const uint8_t FONT_APOSTROPHE[FONT_GLYPH_HEIGHT] = {8, 8, 0, 0, 0};
 
-/* Placeholder for any character outside this small supported set (accented
-   Latin letters, CJK, punctuation we haven't drawn, ...) -- real LaunchBox
-   titles have plenty of these (e.g. Japanese-only titles, or ones starting
-   with an accented letter). Deliberately a visible mark rather than blank:
-   rendering unsupported characters as space made such titles look empty or
-   like they had stray leading whitespace, indistinguishable from an
-   actually-blank title. */
+/* Visible diamond for unsupported characters (accents, CJK, ...) -- blank
+   would be indistinguishable from an actually-empty title. */
 static const uint8_t FONT_UNKNOWN[FONT_GLYPH_HEIGHT] = {4, 14, 31, 14, 4};
 
-/* Disclosure indicator for game-list rows that have multiple versions to
-   pick from (see render.c's version-picker modal) -- not literal
-   punctuation, just mapped onto '>' since it's otherwise unneeded and
-   safe from colliding with real title text (unlike, say, a letter). */
+/* '>' doubles as the multi-version disclosure arrow in the game list. */
 static const uint8_t FONT_ARROW_RIGHT[FONT_GLYPH_HEIGHT] = {16, 24, 28, 24, 16};
 
-/* Returns the glyph bitmap for `c` (case-insensitive). Anything outside
-   this small supported set -- including literal space -- falls through to
-   FONT_UNKNOWN, a visible placeholder mark, EXCEPT space itself, which is
-   the one character that's supposed to render blank. That split is what
-   keeps an actually-blank title distinguishable from one full of
-   characters we just can't draw (see FONT_UNKNOWN's comment). Callers
-   never need a NULL check either way. */
+/* Glyph for `c`, case-insensitive; unsupported characters get FONT_UNKNOWN.
+   Never returns NULL. */
 static inline const uint8_t *font_get_glyph(char c) {
     if (c >= 'a' && c <= 'z') {
         c = (char)(c - ('a' - 'A'));

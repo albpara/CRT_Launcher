@@ -33,7 +33,8 @@ char *xml_read_entire_file(const char *path, long *out_len) {
     return buf;
 }
 
-const char *xml_find_in_range(const char *start, const char *end, const char *needle) {
+/* strstr bounded by `end`, so a missing field can't match the next block. */
+static const char *xml_find_in_range(const char *start, const char *end, const char *needle) {
     size_t needle_len = strlen(needle);
     if (needle_len == 0 || end <= start) {
         return NULL;
@@ -50,7 +51,9 @@ const char *xml_find_in_range(const char *start, const char *end, const char *ne
     return NULL;
 }
 
-void xml_unescape(const char *in, size_t in_len, char *out, size_t out_cap) {
+/* Decodes the entities LaunchBox emits (&amp; &lt; &gt; &quot; &apos;),
+   truncating rather than overflowing. */
+static void xml_unescape(const char *in, size_t in_len, char *out, size_t out_cap) {
     size_t oi = 0;
     size_t i = 0;
 

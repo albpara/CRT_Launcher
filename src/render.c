@@ -6,32 +6,18 @@
 #include "font_data.h"
 #include "startup.h"
 
-/* Text is sized relative to the configured low-res mode: at that exact
-   resolution the scale is 1 (the smallest integer scale that still renders
-   every glyph pixel -- see font_data.h). In desktop/fullscreen mode, where
-   the window is much bigger than the low-res target, compute_text_scale()
-   below picks the largest integer multiple of these base values that still
-   fits, so the same crisp, unfiltered glyphs just get bigger instead of
-   staying pinned at a handful of pixels on a 1080p+ screen. */
+/* Base sizes correspond to the configured low-res mode (scale 1); bigger
+   windows get the largest integer multiple that fits, keeping glyphs
+   pixel-exact. */
 #define BASE_TEXT_SCALE 1
 #define BASE_TEXT_MARGIN 8
-/* Modal box internal padding -- kept as its own constant (rather than
-   reusing BASE_TEXT_MARGIN) specifically so changing the main view's edge
-   margin doesn't also resize the modal's padding. */
 #define BASE_MODAL_PADDING 4
 #define BASE_TEXT_LINE_GAP 2
 #define GRID_CELL_SIZE 16
-/* Cap for render_draw_modal_list's stack-allocated item array -- comfortably
-   above any real LaunchBox game's version count (the largest observed while
-   building this was 9), just a safety bound, not a expected-case limit. */
+/* Safety cap for the version-picker item array (most seen in real data: 9). */
 #define MODAL_MAX_ITEMS 128
-/* Minimum width, in glyph columns, for the system-entry modal (e.g.
-   Calibrate Controls) -- it still grows past this for a longer line, but
-   never shrinks below it, so the box doesn't visibly resize as the
-   calibration prompt changes length between steps ("PRESS INPUT FOR UP"
-   vs "...FOR MODIFIER" vs the longer completion message). Not exposed as
-   a config setting -- deliberately fixed, per user request, to keep the
-   app's surface area small. */
+/* Min width of the system modal so it doesn't resize between calibration
+   prompts. Deliberately not configurable. */
 #define SYSTEM_MODAL_WIDTH_CHARS 42
 
 static const SDL_Color COLOR_GRID_A = {32, 32, 40, 255};
@@ -46,18 +32,15 @@ static const SDL_Color COLOR_SELECT_TEXT = {10, 10, 15, 255};
 static const SDL_Color COLOR_MODAL_DIM = {0, 0, 0, 180};
 static const SDL_Color COLOR_MODAL_BG = {16, 16, 22, 255};
 
-/* Only A-Z, space, etc -- see font_data.h's supported character set. */
 static const char *const APP_TITLE = "CRT LAUNCHER";
 
 SDL_bool render_init(SDL_Window *window, RenderContext *rc) {
-    /* Must be set before SDL_CreateRenderer -- "0"/"nearest" disables any
-       bilinear/anisotropic filtering so every draw stays pixel-crisp. */
+    /* Nearest-neighbor; must be set before SDL_CreateRenderer. */
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
     rc->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!rc->renderer) {
-        SDL_Log("[render] SDL_RENDERER_ACCELERATED failed (%s), retrying without vsync/acceleration flags",
-                SDL_GetError());
+        SDL_Log("[render] SDL_RENDERER_ACCELERATED failed (%s), retrying without flags", SDL_GetError());
         rc->renderer = SDL_CreateRenderer(window, -1, 0);
     }
 
@@ -66,7 +49,7 @@ SDL_bool render_init(SDL_Window *window, RenderContext *rc) {
         return SDL_FALSE;
     }
 
-    SDL_Log("[render] Renderer created with nearest-neighbor scaling (SDL_HINT_RENDER_SCALE_QUALITY=0)");
+    SDL_Log("[render] Renderer created with nearest-neighbor scaling");
     return SDL_TRUE;
 }
 
@@ -89,9 +72,8 @@ static void draw_checkerboard(SDL_Renderer *renderer, int win_w, int win_h) {
     }
 }
 
-/* Draws `text` as filled 1-pixel-multiple rects per glyph pixel -- see
-   font_data.h for why this is a placeholder, not the final font pipeline. */
-static int draw_text(SDL_Renderer *renderer, const char *text, int x, int y, int scale, SDL_Color color) {
+/* Glyphs drawn as filled rects -- see font_data.h. */
+static void draw_text(SDL_Renderer *renderer, const char *text, int x, int y, int scale, SDL_Color color) {
     int cursor_x = x;
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 
@@ -116,24 +98,16 @@ static int draw_text(SDL_Renderer *renderer, const char *text, int x, int y, int
 
         cursor_x += (FONT_GLYPH_WIDTH + 1) * scale;
     }
-
-    return cursor_x - x; /* total pixel width drawn */
 }
 
 static void draw_text_with_shadow(SDL_Renderer *renderer, const char *text, int x, int y, int scale, SDL_Color color) {
-    /* Shadow offset is `scale` pixels (not a fixed 1px) so the drop shadow
-       stays proportionally visible instead of shrinking to nothing once
-       the glyphs themselves get bigger. */
+    /* Shadow offset scales with the glyphs so it stays visible. */
     draw_text(renderer, text, x + scale, y + scale, scale, COLOR_TEXT_SHADOW);
     draw_text(renderer, text, x, y, scale, color);
 }
 
-/* Largest integer multiple of BASE_TEXT_SCALE that still lets the low-res
-   reference resolution (`base_w` x `base_h`, i.e. the configured CRT mode)
-   fit inside the actual window (`win_w` x `win_h`). Always at least
-   BASE_TEXT_SCALE -- in low-res mode win size == base size, so this comes
-   out to exactly 1; in desktop/fullscreen mode the window is bigger, so
-   this scales up. Integer-only, so glyphs stay pixel-exact at any size. */
+/* Largest integer scale that fits the configured low-res reference size
+   into the window; at least BASE_TEXT_SCALE. */
 static int compute_text_scale(int win_w, int win_h, int base_w, int base_h) {
     if (base_w <= 0 || base_h <= 0) {
         return BASE_TEXT_SCALE;
@@ -146,17 +120,9 @@ static int compute_text_scale(int win_w, int win_h, int base_w, int base_h) {
     return (scale < BASE_TEXT_SCALE) ? BASE_TEXT_SCALE : scale;
 }
 
-/* Draws one row, either as a plain shadowed line or -- if `selected` -- as
-   a highlight bar spanning [bar_x, bar_x+bar_w) with centered, contrasting
-   text. `text_x` is independent of the bar bounds so the same helper works
-   both for full-width list rows (bar_x=0, bar_w=window width) and for
-   rows inside a narrower modal box (bar_x/bar_w = the box's content area).
-   `text_color` doubles as the highlight bar's own fill color when
-   selected -- so a favorite's bar highlights yellow, a system row's gray,
-   a normal row green, instead of every row highlighting the same fixed
-   color regardless of what it actually is. Only the text color switches to
-   COLOR_SELECT_TEXT in that case, for contrast against the now-colored
-   bar. */
+/* One row: plain shadowed text, or a highlight bar over [bar_x,
+   bar_x+bar_w) when selected. `text_color` doubles as the bar fill so
+   favorites highlight yellow, system rows gray, etc. */
 static void draw_row(SDL_Renderer *renderer, const char *text, int text_x, int bar_x, int bar_w,
                       int y, int line_h, int text_scale, SDL_bool selected, SDL_Color text_color) {
     int text_y_offset = (line_h - FONT_GLYPH_HEIGHT * text_scale) / 2;
@@ -173,26 +139,11 @@ static void draw_row(SDL_Renderer *renderer, const char *text, int text_x, int b
     }
 }
 
-/* Draws the scrollable list starting at `list_y`: the system rows first
-   (gamelist_system_entry_labels, in COLOR_SYSTEM gray -- see gamelist.h
-   for why they're part of this same flat row space instead of a separate
-   screen), then one checkbox-style row per LaunchboxInfo.platform_names
-   entry in COLOR_PLATFORM ("X " prefix when checked, two spaces when not
-   -- see gamelist_toggle_platform for what checking one does), then one
-   row per *visible* LaunchboxGameGroup (gl->visible_group_indices, not
-   lb->groups directly -- unchecking a platform removes its games from
-   this section without touching lb at all), with a trailing " >" when a
-   game has multiple versions to pick from (see render_draw_modal_list for
-   the picker that opens over this) -- just the disclosure arrow, not the
-   version count, per user request. Favorites are drawn in COLOR_FAVORITE,
-   simply sorted ahead of the rest -- no divider between the two. If there
-   isn't a single visible group (no LaunchBox data at all, or every
-   platform's unchecked), a final non-selectable "NO GAMES" line fills
-   that section instead of just leaving it blank -- see gl->visible_group_count.
-   Always flat -- versions never appear inline here anymore. `visible_rows`
-   must already reflect the same layout (see render_frame, which computes
-   it once and feeds it to gamelist_scroll_into_view() before calling
-   this). */
+/* The unified scrollable list: system rows (startup row's label reflects
+   live registry state), platform checkboxes ("X " = enabled), then the
+   filtered game rows (trailing " >" = multiple versions; favorites
+   yellow, sorted first). Shows a "NO GAMES" placeholder when the filter
+   leaves nothing. */
 static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, const GameListState *gl,
                             int win_w, int list_y, int line_h, int visible_rows,
                             int text_scale, int text_margin) {
@@ -260,8 +211,7 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
             continue;
         }
 
-        /* Only reachable when show_no_games_row and g == game_end -- the
-           synthetic, non-selectable placeholder row. */
+        /* The synthetic non-selectable "NO GAMES" row. */
         draw_row(renderer, "NO GAMES", text_margin, 0, win_w, y, line_h, text_scale, SDL_FALSE, COLOR_TEXT);
         y += line_h;
         rows_drawn++;
@@ -269,21 +219,10 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
     }
 }
 
-/* Draws a full-screen dim overlay plus a centered, bordered box listing
-   `items` (`item_count` C strings), highlighting `selected_index`, with
-   `title` as a header above them (pass NULL to omit). Sized to fit the
-   longest string or `min_width_chars` (0 = ignore, size purely from
-   content), whichever is wider, clamped to the window so it can't
-   overflow on a tiny low-res screen.
-
-   `accent_color` themes the border, separator, title, and unselected/base
-   item text (and doubles as the selected-row highlight color, via
-   draw_row) -- e.g. yellow for a favorite's version picker, gray for the
-   system menu, matching what the row that opened the modal used.
-
-   Deliberately generic -- takes plain strings, knows nothing about games
-   or versions -- so any future modal list (e.g. a settings menu) can
-   reuse it as-is; it's just "a titled list of choices, one highlighted". */
+/* Generic modal: dim overlay + centered bordered box of plain strings,
+   one optionally highlighted. Sized to the longest string or
+   `min_width_chars`, clamped to the window. `accent_color` themes the
+   border/title/text and the selected-row bar. */
 void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int text_scale,
                              const char *title, const char *const *items, int item_count,
                              int selected_index, int min_width_chars, SDL_Color accent_color) {
@@ -302,8 +241,6 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
         max_chars = min_width_chars;
     }
 
-    /* A separator between the title and the list only makes sense if
-       there's a title and something below it to separate from. */
     SDL_bool has_separator = (title != NULL) && (item_count > 0);
 
     int box_w = max_chars * glyph_advance + padding * 2;
@@ -363,8 +300,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     SDL_RenderClear(renderer);
 
     if (screensaver_active) {
-        /* Nothing else drawn at all -- not even the checkerboard -- so a
-           static bright pattern can't sit on screen indefinitely. */
+        /* Solid black only -- CRT burn-in protection. */
         SDL_RenderPresent(renderer);
         return;
     }
@@ -373,14 +309,8 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
     char game_count_line[64];
 
-    /* The system section (gamelist_system_entry_labels) is always present,
-       even with zero LaunchBox games loaded -- calibration shouldn't
-       require LaunchBox to be configured first. "OF" instead of a literal
-       "/" -- the font has no slash glyph (see font_data.h's supported
-       character set), so a '/' would render as FONT_UNKNOWN's diamond.
-       Counts against gl->visible_group_count (the filtered view), not
-       lb->group_count, so the index/total stay consistent with what's
-       actually on screen while some platforms are unchecked. */
+    /* "OF" instead of '/' -- the font has no slash glyph. Counts reflect
+       the filtered view, not the full database. */
     if (gamelist_selected_is_system(gl)) {
         snprintf(game_count_line, sizeof(game_count_line), "SETTINGS");
     } else if (gamelist_selected_is_platform(gl, lb)) {
@@ -399,8 +329,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
     int y = text_margin;
 
-    /* App title, centered horizontally, at double the base text size so it
-       reads as a header rather than just another status line. */
+    /* Centered app title at 2x scale. */
     int title_scale = text_scale * 2;
     int title_line_h = FONT_GLYPH_HEIGHT * title_scale + BASE_TEXT_LINE_GAP * title_scale;
     int title_w = (int)strlen(APP_TITLE) * (FONT_GLYPH_WIDTH + 1) * title_scale;
@@ -408,22 +337,18 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     draw_text_with_shadow(renderer, APP_TITLE, title_x, y, title_scale, COLOR_TEXT);
     y += title_line_h;
 
+    /* Right-aligned game counter. */
     int game_count_w = (int)strlen(game_count_line) * (FONT_GLYPH_WIDTH + 1) * text_scale;
     int game_count_x = dc->width - text_margin - game_count_w;
     draw_text_with_shadow(renderer, game_count_line, game_count_x, y, text_scale, COLOR_TEXT); y += line_h;
 
-    /* Separator between the status header and the scrollable list below it
-       -- same "thin border-colored rect" look as the modal's title
-       separator. */
+    /* Separator between header and list. */
     SDL_Rect header_sep = {text_margin, y + (line_h - text_scale) / 2,
                             dc->width - text_margin * 2, text_scale};
     SDL_SetRenderDrawColor(renderer, COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, 255);
     SDL_RenderFillRect(renderer, &header_sep);
     y += line_h;
 
-    /* Bottom margin matches text_margin (the same edge padding used on
-       the left/right/top) so the list stops short of the screen edge
-       instead of running flush to it. */
     int visible_rows = (dc->height - y - text_margin) / line_h;
     if (visible_rows < 0) {
         visible_rows = 0;
@@ -435,7 +360,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     if (selected_grp) {
         int item_count = selected_grp->version_count;
         if (item_count > MODAL_MAX_ITEMS) {
-            item_count = MODAL_MAX_ITEMS; /* no real game has anywhere near this many versions */
+            item_count = MODAL_MAX_ITEMS;
         }
 
         const char *items[MODAL_MAX_ITEMS];
@@ -443,21 +368,13 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
             items[i] = lb->versions[selected_grp->version_start + i].label;
         }
 
-        /* Favorite's version picker highlights yellow, matching the row
-           that opened it; any other game's stays the default green. */
+        /* Accent matches the row that opened it (yellow for favorites). */
         SDL_Color accent = selected_grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
         render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
                                 selected_grp->title, items, item_count, gl->selected_version, 0, accent);
     } else if (gl->system_modal_open) {
-        /* Body text is whatever main.c put in system_modal_status -- for
-           Calibrate Controls that's the current "press input for X" prompt
-           or the completion message (see main.c). Given a fixed minimum
-           width (rather than 0/auto) so the box doesn't visibly resize as
-           the prompt text changes length between calibration steps, and
-           gray to match the system row itself. system_modal_hint, when
-           non-empty, adds a second un-highlighted line below it (e.g. the
-           "ESC WILL EXIT CALIBRATION" reminder) -- main.c decides when
-           there's one to show. */
+        /* Calibration prompts/completion text, owned by main.c. Fixed min
+           width so the box doesn't resize between steps. */
         const char *items[2];
         int item_count = 0;
         items[item_count++] = gl->system_modal_status;
@@ -468,13 +385,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
                                 gamelist_system_entry_labels[gl->selected_group],
                                 items, item_count, -1, SYSTEM_MODAL_WIDTH_CHARS, COLOR_SYSTEM);
     } else if (gl->exit_confirm_open) {
-        /* Not tied to a system-menu row -- triggered by BACK at the top
-           level of the main list, see main.c. Reuses the same generic
-           modal primitive as everything else. Generic action names, not
-           literal key names -- see the line8 comment above for why. No
-           question mark in the title/body -- the font doesn't have one
-           (see font_data.h), an unsupported character would just render
-           as a diamond. */
+        /* Generic action names (bindings vary); no '?' -- font lacks it. */
         static const char *const items[] = {"PRESS SELECT TO CONFIRM", "PRESS BACK TO GO BACK"};
         render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
                                 "EXIT", items, 2, -1, 0, COLOR_EXIT);
