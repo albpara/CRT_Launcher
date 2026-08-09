@@ -194,6 +194,12 @@ overall spec beyond what's in the code and README right now.
 - **Keep it simple; don't design ahead of what's asked.** This project has
   explicitly favored small, direct fixes over speculative abstraction
   throughout. When in doubt, prefer the smaller change.
+- **Concise comments (explicit user request, 2026-08-09).** Keep code
+  comments as short as possible — one or two lines stating the non-obvious
+  fact or constraint, no narrative history. The codebase used to carry
+  long essay-style comments; they were deliberately trimmed repo-wide.
+  Don't reintroduce the old style. Same for config.ini and the README:
+  the README stays tidy, centered on purpose + how to build.
 
 ## Known placeholders / deliberately out of scope
 

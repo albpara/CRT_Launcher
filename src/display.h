@@ -17,23 +17,18 @@ typedef struct {
     DisplayMode mode;
     int width;      /* current window client size in pixels */
     int height;
-    int refresh_rate; /* Hz for the currently active mode, 0 if unknown/windowed */
 
-    /* SDL_TRUE if the low-res mode is a real exclusive-fullscreen display
-       mode the GPU/driver reported; SDL_FALSE if we're only faking it with
-       a plain windowed surface because the mode wasn't available. */
+    /* SDL_TRUE if low-res is a real exclusive-fullscreen mode; SDL_FALSE
+       when faked with a plain window because the mode wasn't available. */
     SDL_bool lowres_is_exclusive;
 } DisplayContext;
 
-/* Creates the window and attempts to apply the configured low-res mode as
-   an exclusive-fullscreen display mode. If that exact mode isn't reported
-   by the display, falls back to an ordinary windowed surface at the same
-   pixel size (no stretching either way). Returns SDL_FALSE on unrecoverable
-   window-creation failure. */
+/* Creates the window in the configured low-res mode (exclusive fullscreen
+   if the display reports that exact mode, else a windowed surface at the
+   same pixel size). Returns SDL_FALSE on window-creation failure. */
 SDL_bool display_init(const AppConfig *cfg, DisplayContext *ctx);
 
-/* Toggles between the low-res mode and the desktop's native resolution.
-   Logs which path it took (fullscreen-desktop vs. windowed low-res). */
+/* Toggles between low-res and the desktop's native resolution. */
 void display_toggle(DisplayContext *ctx);
 
 void display_shutdown(DisplayContext *ctx);

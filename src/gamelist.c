@@ -7,29 +7,21 @@
 
 const char *const gamelist_system_entry_labels[GAMELIST_SYSTEM_ENTRY_COUNT] = {
     "CALIBRATE CONTROLS",
-    "ADD TO STARTUP", /* fallback text only -- render.c always overrides this
-                          particular index with live registry state, see
-                          GAMELIST_SYSTEM_ENTRY_STARTUP's doc comment */
+    "ADD TO STARTUP", /* fallback only -- render.c overrides with live state */
 };
 
 static char first_letter(const char *title) {
     return (char)toupper((unsigned char)title[0]);
 }
 
-/* First row index of the platform section -- right after the system rows. */
 static int platform_rows_start(void) {
     return GAMELIST_SYSTEM_ENTRY_COUNT;
 }
 
-/* First row index of the (filtered) game section -- right after the
-   platform rows. */
 static int game_rows_start(const LaunchboxInfo *lb) {
     return GAMELIST_SYSTEM_ENTRY_COUNT + lb->platform_count;
 }
 
-/* Total rows in the unified space: system entries, platform toggles, and
-   visible groups. Always >= GAMELIST_SYSTEM_ENTRY_COUNT, even with zero
-   LaunchBox games -- the system rows must stay navigable regardless. */
 static int gamelist_total_rows(const LaunchboxInfo *lb, const GameListState *state) {
     return game_rows_start(lb) + state->visible_group_count;
 }
@@ -55,9 +47,7 @@ const LaunchboxGameGroup *gamelist_selected_group(const GameListState *state, co
     return &lb->groups[state->visible_group_indices[idx]];
 }
 
-/* Case-insensitively checks whether `name` appears as one of the
-   comma-separated tokens in `csv` (surrounding spaces around each token
-   are ignored). No allocation -- scans `csv` in place. */
+/* Case-insensitive comma-separated token match, spaces trimmed. */
 static SDL_bool platform_name_in_csv(const char *csv, const char *name) {
     size_t name_len = strlen(name);
     const char *p = csv;
@@ -84,11 +74,8 @@ static SDL_bool platform_name_in_csv(const char *csv, const char *name) {
     return SDL_FALSE;
 }
 
-/* Resolves config.ini's raw selected_platforms value ("All", "None", or a
-   comma-separated platform name list) into `out` (lb->platform_count
-   SDL_bools, parallel to lb->platform_names). Unmatched names in the CSV
-   are silently ignored (e.g. a platform whose XML was since removed) --
-   they just don't correspond to any row. */
+/* "All", "None", or a name list -> per-platform bools. Unknown names in
+   the CSV are ignored. */
 static void gamelist_parse_platform_selection(const char *csv, const LaunchboxInfo *lb, SDL_bool *out) {
     SDL_bool all = (!csv || !csv[0] || SDL_strcasecmp(csv, "All") == 0) ? SDL_TRUE : SDL_FALSE;
     SDL_bool none = (!all && SDL_strcasecmp(csv, "None") == 0) ? SDL_TRUE : SDL_FALSE;
@@ -104,15 +91,9 @@ static void gamelist_parse_platform_selection(const char *csv, const LaunchboxIn
     }
 }
 
-/* Rebuilds visible_group_indices/visible_group_count from scratch against
-   the current platform_selected -- called once at init and again every
-   time a platform's checked/unchecked. A group's "platform" for filtering
-   purposes is its primary version's (versions[version_start]) -- the same
-   entry is_favorite is read from, for the same reason (see
-   LaunchboxGameGroup's own doc comment): it's the one guaranteed to carry
-   real data, an AdditionalApplication doesn't have its own independent
-   notion of platform. O(group_count * platform_count), fine since this
-   only runs on a toggle, never per-frame. */
+/* Rebuilds the visible set from platform_selected. A group's platform is
+   its primary version's (the entry guaranteed to carry real data). Runs
+   only on init and toggles, never per-frame. */
 static void gamelist_recompute_visible_groups(GameListState *state, const LaunchboxInfo *lb) {
     state->visible_group_count = 0;
     if (!state->visible_group_indices) {
@@ -222,28 +203,14 @@ void gamelist_format_platform_selection(const GameListState *state, const Launch
 
 void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta) {
     if (delta == 0 || state->system_modal_open || state->exit_confirm_open) {
-        /* A system entry's own modal (e.g. Calibrate Controls) has nothing
-           to navigate -- unlike the version-picker modal below, it's just
-           a status display, not a list. Without this guard, moving
-           selected_group off the system row it's showing corrupts the
-           gamelist_system_entry_labels[] lookup in render.c (a
-           GAMELIST_SYSTEM_ENTRY_COUNT-element array) into an out-of-bounds
-           read -- this is what crashed on a stray Down press. The exit
-           confirmation is guarded the same way for the same class of
-           reason -- nothing underneath it should move while it's up. */
+        /* Nothing underneath an open modal may move -- moving
+           selected_group off a system row corrupts render.c's
+           gamelist_system_entry_labels[] lookup (crashed once). */
         return;
     }
 
     if (state->selected_version >= 0) {
-        /* Modal open -- stay scoped to its rows, wrapping at the ends.
-           The underlying game list doesn't move while it's up. Normally
-           only reachable for a real group (see gamelist_toggle_expand),
-           but defended anyway rather than trusting that invariant always
-           holds -- the same "assume it's fine" reasoning was what let a
-           NULL-deref crash reach production once before elsewhere in this
-           file (see the comment on the guard above). If the group somehow
-           doesn't resolve, just close the modal instead of dereferencing
-           NULL. */
+        /* Version picker open -- wrap within its rows only. */
         const LaunchboxGameGroup *grp = gamelist_selected_group(state, lb);
         if (!grp) {
             state->selected_version = -1;
@@ -287,9 +254,8 @@ void gamelist_jump_letter(GameListState *state, const LaunchboxInfo *lb, int dir
         }
         state->selected_group = i + rows_start;
     } else if (direction < 0) {
-        /* Walk back to the start of the current letter's run first, so
-           "previous letter" always means a different letter -- not just
-           one row up within the same run. */
+        /* Walk to the start of the current run first, so "previous" always
+           means a different letter. */
         int group_start = idx;
         while (group_start > 0 &&
                first_letter(lb->groups[state->visible_group_indices[group_start - 1]].title) == current) {
@@ -308,7 +274,7 @@ void gamelist_jump_letter(GameListState *state, const LaunchboxInfo *lb, int dir
         state->selected_group = prev_start + rows_start;
     }
 
-    state->selected_version = -1; /* letter-jumping always closes the modal */
+    state->selected_version = -1;
 }
 
 void gamelist_toggle_expand(GameListState *state, const LaunchboxInfo *lb) {

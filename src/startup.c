@@ -28,9 +28,7 @@ SDL_bool startup_enable(void) {
         return SDL_FALSE;
     }
 
-    /* Quoted so Windows handles a path containing spaces correctly when it
-       runs this at sign-in, same as every other spawned command line in
-       this app (see launcher.c). */
+    /* Quoted so paths with spaces survive the sign-in launch. */
     char quoted[MAX_PATH + 2];
     snprintf(quoted, sizeof(quoted), "\"%s\"", exe_path);
 
@@ -61,9 +59,7 @@ SDL_bool startup_disable(void) {
     LONG result = RegDeleteValueA(key, STARTUP_VALUE_NAME);
     RegCloseKey(key);
 
-    /* ERROR_FILE_NOT_FOUND just means it was already gone -- not a
-       failure from the caller's point of view (startup_is_enabled() would
-       already have reported SDL_FALSE, so there'd be nothing to remove). */
+    /* Already-gone counts as success. */
     if (result != ERROR_SUCCESS && result != ERROR_FILE_NOT_FOUND) {
         SDL_Log("[startup] WARNING: RegDeleteValueA failed (error %ld)", result);
         return SDL_FALSE;

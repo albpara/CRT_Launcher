@@ -63,18 +63,10 @@ static SDL_bool parse_bool_field(const char *s) {
     return (strcmp(s, "true") == 0) ? SDL_TRUE : SDL_FALSE;
 }
 
-/*
- * Walks `data` once, recognizing "<EmulatorPlatform>" and "<Emulator>"
- * block openings as it goes. This has to be a single combined scan rather
- * than two independent strstr("<Emulator>") / strstr("<EmulatorPlatform>")
- * passes: every <EmulatorPlatform> block itself contains a *child field*
- * literally named <Emulator> (the ID of the emulator it maps), so a naive
- * global search for "<Emulator>" would also match there and try to parse
- * that single ID value as if it were the opening of an entire Emulator
- * block. Checking "<EmulatorPlatform>" first at each position and jumping
- * straight to its closing tag when matched means we never land on that
- * inner field while looking for top-level Emulator blocks.
- */
+/* Single combined scan: <EmulatorPlatform> blocks contain a child field
+   literally named <Emulator>, so matching <EmulatorPlatform> first and
+   jumping past whole blocks keeps a global "<Emulator>" search from
+   misparsing that child as a block opening. */
 static void scan_emulators_data(const char *data, EmulatorArray *emulators, EmulatorPlatformArray *platforms) {
     static const char EMU_PLATFORM_OPEN[] = "<EmulatorPlatform>";
     static const char EMU_PLATFORM_CLOSE[] = "</EmulatorPlatform>";
@@ -174,7 +166,7 @@ void launcher_load(const char *launchbox_dir, LauncherDatabase *out) {
     long len = 0;
     char *data = xml_read_entire_file(file_path, &len);
     if (!data) {
-        SDL_Log("[launcher] WARNING: could not open '%s' -- ENTER will not be able to actually launch games", file_path);
+        SDL_Log("[launcher] WARNING: could not open '%s' -- games cannot be launched", file_path);
         return;
     }
 
@@ -232,9 +224,7 @@ static const LauncherEmulatorPlatform *find_platform_mapping(const LauncherDatab
     return NULL;
 }
 
-/* Everything after the last '\' or '/' (or the whole string if there's
-   neither), with the extension (everything from the last '.' onward, if
-   any) stripped too -- "Roms\0.262\springer.zip" -> "springer". */
+/* "Roms\0.262\springer.zip" -> "springer". */
 static void base_name_without_ext(const char *path, char *out, size_t out_cap) {
     const char *base = path;
     for (const char *p = path; *p; p++) {
@@ -257,8 +247,7 @@ static void base_name_without_ext(const char *path, char *out, size_t out_cap) {
     out[copy_len] = '\0';
 }
 
-/* Everything up to (not including) the last '\' or '/' -- the containing
-   directory of `path`. Empty string if there's no separator. */
+/* Containing directory of `path`; empty if no separator. */
 static void directory_part(const char *path, char *out, size_t out_cap) {
     const char *last_sep = NULL;
     for (const char *p = path; *p; p++) {
@@ -274,11 +263,8 @@ static void directory_part(const char *path, char *out, size_t out_cap) {
     out[len] = '\0';
 }
 
-
-/* Replaces the first (and, per every command line observed in real
-   LaunchBox data, only) occurrence of "%romlocation%" in `template_str`
-   with `replacement`, copying the rest through unchanged. If the
-   placeholder isn't present, `template_str` is copied through as-is. */
+/* Replaces the first "%romlocation%" with `replacement` (copies through
+   unchanged when absent). */
 static void substitute_romlocation(const char *template_str, const char *replacement, char *out, size_t out_cap) {
     static const char PLACEHOLDER[] = "%romlocation%";
     const char *pos = strstr(template_str, PLACEHOLDER);
@@ -290,10 +276,7 @@ static void substitute_romlocation(const char *template_str, const char *replace
     snprintf(out, out_cap, "%.*s%s%s", prefix_len, template_str, replacement, pos + (sizeof(PLACEHOLDER) - 1));
 }
 
-/* SDL_TRUE if `path` ends in ".exe" (case-insensitive) -- the sanity check
-   before treating a version with no resolvable emulator as a directly
-   launchable Windows app rather than just failing (see launch_windows_app
-   below). */
+#ifdef _WIN32
 static SDL_bool has_exe_extension(const char *path) {
     size_t len = strlen(path);
     if (len < 4) {
@@ -302,16 +285,9 @@ static SDL_bool has_exe_extension(const char *path) {
     return SDL_strcasecmp(path + len - 4, ".exe") == 0 ? SDL_TRUE : SDL_FALSE;
 }
 
-/* SDL_TRUE if `path` is already an absolute Windows path -- a drive letter
-   (e.g. "D:\...") or a UNC path ("\\server\share\..."). Needed because a
-   Windows-platform ApplicationPath is NOT reliably one or the other:
-   real-world data has shown both an absolute one (Fightcade, installed at
-   "D:\Fightcade\Fightcade2.exe", nowhere near launchbox_dir) AND a
-   relative one (an app living inside the LaunchBox folder tree, same
-   convention as a ROM path) -- an earlier version of this code assumed
-   "always absolute" based on only having seen the first case, which broke
-   the second one. Don't remove this check again without re-confirming
-   against real data first. */
+/* Drive letter ("D:\...") or UNC ("\\server\..."). A Windows-platform
+   ApplicationPath can be either absolute or launchbox_dir-relative --
+   real data has shown both; don't assume one. */
 static SDL_bool is_absolute_windows_path(const char *path) {
     if (path[0] == '\\' && path[1] == '\\') {
         return SDL_TRUE;
@@ -320,22 +296,39 @@ static SDL_bool is_absolute_windows_path(const char *path) {
             (path[2] == '\\' || path[2] == '/')) ? SDL_TRUE : SDL_FALSE;
 }
 
-#ifdef _WIN32
-/* Spawns `ver->rom_path` itself, with no emulator involved and no
-   arguments -- the launch path for LaunchBox's "Windows" platform (and
-   any other platform where a game just isn't set up to run through an
-   emulator): those games' ApplicationPath already points straight at the
-   .exe to run, and LaunchBox itself just launches it directly rather than
-   resolving an Emulators.xml entry, which is exactly why launcher_launch
-   below falls back to this when no emulator can be resolved at all.
-   ApplicationPath for a Windows-platform entry might be an absolute path
-   already (e.g. "D:\Fightcade\Fightcade2.exe", nowhere near
-   launchbox_dir) or a relative one (an app living inside the LaunchBox
-   folder tree, same convention as a ROM path) -- see
-   is_absolute_windows_path's comment for why both are handled rather than
-   assuming one. Working directory is the exe's own containing folder,
-   matching the emulator-launch path's convention of using the launched
-   process's own folder rather than launchbox_dir. */
+/* Spawns `full_command_line` (mutable, as CreateProcess requires when
+   lpApplicationName is NULL). CREATE_NEW_PROCESS_GROUP is required: a
+   console-subsystem child would otherwise share our console/process
+   group, and a console control event on its exit can silently kill the
+   launcher too -- observed in practice as the launcher vanishing after
+   returning from a game, with nothing logged. */
+static SDL_bool spawn_process(char *full_command_line, const char *working_dir) {
+    SDL_Log("[launcher] Launching: %s", full_command_line);
+    SDL_Log("[launcher] Working directory: %s", working_dir);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    SDL_zero(si);
+    si.cb = sizeof(si);
+    SDL_zero(pi);
+
+    BOOL ok = CreateProcessA(NULL, full_command_line, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP,
+                              NULL, working_dir, &si, &pi);
+
+    if (!ok) {
+        SDL_Log("[launcher] WARNING: CreateProcess failed (error %lu) for '%s'",
+                (unsigned long)GetLastError(), full_command_line);
+        return SDL_FALSE;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return SDL_TRUE;
+}
+
+/* Direct launch with no emulator and no arguments -- how LaunchBox's
+   "Windows" platform works (ApplicationPath points straight at the exe).
+   Working directory is the exe's own folder. */
 static SDL_bool launch_windows_app(const LauncherDatabase *db, const LaunchboxVersion *ver) {
     char absolute_app_path[LAUNCHER_PATH_MAX * 2];
     if (is_absolute_windows_path(ver->rom_path)) {
@@ -350,40 +343,8 @@ static SDL_bool launch_windows_app(const LauncherDatabase *db, const LaunchboxVe
     char full_command_line[LAUNCHER_PATH_MAX * 2 + 2];
     snprintf(full_command_line, sizeof(full_command_line), "\"%s\"", absolute_app_path);
 
-    SDL_Log("[launcher] '%s' has no resolvable emulator but its ApplicationPath ends in .exe -- "
-            "launching it directly as a Windows app", ver->label);
-    SDL_Log("[launcher] Launching: %s", full_command_line);
-    SDL_Log("[launcher] Working directory: %s", working_dir);
-
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    SDL_zero(si);
-    si.cb = sizeof(si);
-    SDL_zero(pi);
-
-    /* CREATE_NEW_PROCESS_GROUP -- if the launched game/app happens to be a
-       console-subsystem executable (some emulator builds are) and we
-       don't request a new process group, it inherits this process's
-       console and process group. A console control event generated when
-       that process's console session tears down on exit can then
-       propagate to every process sharing that group -- including this
-       one -- and an unhandled one silently terminates us via Windows'
-       default handler, with no crash dialog and nothing for SDL_Log to
-       catch (a real symptom seen in practice: the launcher vanishing
-       sometime after returning from a game, no error logged anywhere).
-       This isolates the child's console/process group from ours so its
-       exit can't reach back and kill the launcher. */
-    BOOL ok = CreateProcessA(NULL, full_command_line, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP, NULL, working_dir, &si, &pi);
-
-    if (!ok) {
-        SDL_Log("[launcher] WARNING: CreateProcess failed (error %lu) for '%s'",
-                (unsigned long)GetLastError(), full_command_line);
-        return SDL_FALSE;
-    }
-
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return SDL_TRUE;
+    SDL_Log("[launcher] '%s' has no resolvable emulator but ends in .exe -- launching directly", ver->label);
+    return spawn_process(full_command_line, working_dir);
 }
 
 SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver) {
@@ -396,8 +357,7 @@ SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver
     const LauncherEmulatorPlatform *platform_mapping = NULL;
 
     if (emulator_id[0]) {
-        /* Game specifies its own emulator directly; a platform mapping is
-           only consulted for a possible command-line override. */
+        /* Own emulator; mapping only consulted for a command-line override. */
         platform_mapping = find_platform_mapping(db, emulator_id, ver->platform);
     } else {
         platform_mapping = find_default_platform(db, ver->platform);
@@ -408,11 +368,7 @@ SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver
 
     const LauncherEmulator *emu = emulator_id[0] ? find_emulator(db, emulator_id) : NULL;
     if (!emu) {
-        /* No emulator to run this through at all -- before giving up,
-           check whether it's directly launchable instead (LaunchBox's
-           "Windows" platform, or any other platform with no emulator
-           configured, works this way: ApplicationPath already points at
-           the .exe to run). */
+        /* No emulator at all -- maybe a directly launchable Windows app. */
         if (has_exe_extension(ver->rom_path)) {
             return launch_windows_app(db, ver);
         }
@@ -455,41 +411,7 @@ SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver
     char working_dir[LAUNCHER_PATH_MAX * 2];
     directory_part(absolute_app_path, working_dir, sizeof(working_dir));
 
-    SDL_Log("[launcher] Launching: %s", full_command_line);
-    SDL_Log("[launcher] Working directory: %s", working_dir);
-
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    SDL_zero(si);
-    si.cb = sizeof(si);
-    SDL_zero(pi);
-
-    /* lpApplicationName is NULL so CreateProcess parses the exe path out of
-       lpCommandLine itself -- lpCommandLine must be a mutable buffer,
-       which full_command_line (a local array) is. */
-    /* CREATE_NEW_PROCESS_GROUP -- if the launched game/app happens to be a
-       console-subsystem executable (some emulator builds are) and we
-       don't request a new process group, it inherits this process's
-       console and process group. A console control event generated when
-       that process's console session tears down on exit can then
-       propagate to every process sharing that group -- including this
-       one -- and an unhandled one silently terminates us via Windows'
-       default handler, with no crash dialog and nothing for SDL_Log to
-       catch (a real symptom seen in practice: the launcher vanishing
-       sometime after returning from a game, no error logged anywhere).
-       This isolates the child's console/process group from ours so its
-       exit can't reach back and kill the launcher. */
-    BOOL ok = CreateProcessA(NULL, full_command_line, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP, NULL, working_dir, &si, &pi);
-
-    if (!ok) {
-        SDL_Log("[launcher] WARNING: CreateProcess failed (error %lu) for '%s'",
-                (unsigned long)GetLastError(), full_command_line);
-        return SDL_FALSE;
-    }
-
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return SDL_TRUE;
+    return spawn_process(full_command_line, working_dir);
 }
 #else
 SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver) {
