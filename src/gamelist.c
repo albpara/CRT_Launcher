@@ -226,10 +226,28 @@ void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta) {
     }
 
     int total = gamelist_total_rows(lb, state);
-    int next = (state->selected_group + delta) % total;
-    if (next < 0) {
-        next += total;
+    int games_start = game_rows_start(lb);
+    int next = state->selected_group + delta;
+
+    if (state->selected_group >= games_start) {
+        /* The games loop on themselves: running off the end returns to
+           the first game instead of dropping into the settings rows,
+           which are reached by going up from the first game instead. */
+        if (next >= total) {
+            next = games_start;
+        } else if (next < games_start) {
+            next = games_start - 1;
+        }
+    } else {
+        /* Settings and platform rows sit above the list: walk down into
+           the games, stop at the top. */
+        if (next >= total) {
+            next = total - 1;
+        } else if (next < 0) {
+            next = 0;
+        }
     }
+
     state->selected_group = next;
 }
 

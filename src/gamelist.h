@@ -72,9 +72,11 @@ void gamelist_toggle_platform(GameListState *state, const LaunchboxInfo *lb, int
 void gamelist_format_platform_selection(const GameListState *state, const LaunchboxInfo *lb,
                                          char *out, size_t out_cap);
 
-/* Moves the selection by `delta`, wrapping across the whole row space (or
-   within the version-picker modal when open). No-op while the system
-   modal or exit confirmation is up -- moving selected_group under an open
+/* Moves the selection by `delta` (or within the version-picker modal when
+   open). The games wrap on themselves -- past the last one comes back to
+   the first, not into the settings rows; those are reached by going up
+   from the first game, and stop at the top. No-op while the system modal
+   or exit confirmation is up -- moving selected_group under an open
    system modal would corrupt render.c's label lookup. */
 void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta);
 
