@@ -16,9 +16,8 @@ resolution (e.g. 320x240) with pixel-perfect, unfiltered rendering.
 - Per-platform show/hide filter, persisted to `config.ini`.
 - In-app controller calibration (keyboard, buttons, hats, analog axes),
   auto-started on first run.
-- A Galaga starfield as both the launcher background and the screensaver
-  (CRT burn-in protection); the background is switchable to a plain
-  checkerboard.
+- A Galaga starfield screensaver (CRT burn-in protection), which can also
+  replace the default checkerboard as the launcher background.
 - Run-at-Windows-startup toggle, exclusive-fullscreen low-res with
   windowed fallback.
 
@@ -83,10 +82,10 @@ keys/Enter/Escape/Shift always work as a hardcoded keyboard fallback.
 - The configured hotkey (default **F5**) toggles low-res <-> desktop
   resolution.
 
-A Galaga starfield drifts behind the list (set `background=checkerboard`
-for the plain grid instead), and after a minute without input it takes
-over the whole screen as the screensaver; any input wakes it. See the
-comments in [config.ini](config.ini) for every
+After a minute without input a Galaga starfield takes over the screen as
+the screensaver; any input wakes it. Set `background=starfield` to have it
+drift behind the list as well, in place of the default checkerboard. See
+the comments in [config.ini](config.ini) for every
 setting.
 
 ## Known limitations

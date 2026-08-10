@@ -222,6 +222,8 @@ static void config_write_default_file(const char *path) {
         "width=320\n"
         "height=240\n"
         "refresh_rate=60\n"
+        "; \"checkerboard\" or \"starfield\" (the Galaga one).\n"
+        "background=checkerboard\n"
         "screensaver_timeout_seconds=60\n"
         "\n"
         "[input]\n"
@@ -249,7 +251,7 @@ void config_load(const char *path, AppConfig *out) {
     out->width = CONFIG_DEFAULT_WIDTH;
     out->height = CONFIG_DEFAULT_HEIGHT;
     out->refresh_rate = CONFIG_DEFAULT_REFRESH;
-    out->background = BACKGROUND_STARFIELD;
+    out->background = BACKGROUND_CHECKERBOARD;
     out->screensaver_timeout_ms = CONFIG_DEFAULT_SCREENSAVER_TIMEOUT_MS;
     out->toggle_hotkey = CONFIG_DEFAULT_HOTKEY;
     out->nav_repeat_delay_ms = CONFIG_DEFAULT_NAV_REPEAT_DELAY_MS;
@@ -319,7 +321,11 @@ void config_load(const char *path, AppConfig *out) {
                     } else if (SDL_strcasecmp(value, "starfield") == 0) {
                         out->background = BACKGROUND_STARFIELD;
                     } else {
-                        SDL_Log("[config] Unrecognized background '%s', keeping starfield", value);
+                        /* Fall back rather than keep whatever was parsed
+                           before, so a bad value always lands on the
+                           default. */
+                        out->background = BACKGROUND_CHECKERBOARD;
+                        SDL_Log("[config] Unrecognized background '%s', using checkerboard", value);
                     }
                 }
             } else if (strcmp(section, "input") == 0) {

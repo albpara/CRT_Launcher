@@ -56,8 +56,8 @@ void input_binding_to_string(const InputBinding *b, char *out, size_t out_cap);
 
 /* What's drawn behind the game list. */
 typedef enum {
-    BACKGROUND_STARFIELD = 0,
-    BACKGROUND_CHECKERBOARD,
+    BACKGROUND_CHECKERBOARD = 0,  /* default, so a zeroed AppConfig matches it */
+    BACKGROUND_STARFIELD,
 } BackgroundStyle;
 
 /* Every field ends up valid -- config_load() fills in defaults for
