@@ -60,6 +60,12 @@ typedef enum {
     BACKGROUND_STARFIELD,
 } BackgroundStyle;
 
+/* Which bitmap font the UI draws with (see font_data.h). */
+typedef enum {
+    FONT_STYLE_COMPACT = 0,  /* 5x5; default, so a zeroed AppConfig matches it */
+    FONT_STYLE_GALAGA88,     /* 7x7 -- fits ~a quarter less text per row */
+} FontStyle;
+
 /* Every field ends up valid -- config_load() fills in defaults for
    anything missing or unparsable. */
 typedef struct {
@@ -67,6 +73,7 @@ typedef struct {
     int height;
     int refresh_rate;      /* Hz; 0 = any */
     BackgroundStyle background;
+    FontStyle font;
     /* Idle ms before blanking to black (CRT burn-in protection). 0
        disables. Stored in ms (matches SDL_GetTicks); config.ini's key is
        screensaver_timeout_seconds, converted on load. */

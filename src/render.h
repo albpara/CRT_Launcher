@@ -8,12 +8,17 @@
 #include "launchbox.h"
 #include "starfield.h"
 
+/* Laid out in font_data.h; only render.c needs its contents. */
+struct BitmapFont;
+
 typedef struct {
     SDL_Renderer *renderer;
+    /* Picked once from cfg->font -- there's no hot-reload. */
+    const struct BitmapFont *font;
 } RenderContext;
 
 /* Creates a nearest-neighbor renderer bound to `window`. */
-SDL_bool render_init(SDL_Window *window, RenderContext *rc);
+SDL_bool render_init(SDL_Window *window, const AppConfig *cfg, RenderContext *rc);
 
 /* Draws one frame: background (cfg->background), title + game counter,
    the scrollable list, and whichever modal is open. Mutates
@@ -28,7 +33,7 @@ void render_screensaver_frame(RenderContext *rc, const DisplayContext *dc, Starf
 /* Generic modal: dim overlay + centered box of plain strings, one
    optionally highlighted (selected_index, -1 for none). min_width_chars 0
    sizes purely from content. Exposed for reuse by future menus. */
-void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int text_scale,
+void render_draw_modal_list(const RenderContext *rc, int win_w, int win_h, int text_scale,
                              const char *title, const char *const *items, int item_count,
                              int selected_index, int min_width_chars, SDL_Color accent_color);
 

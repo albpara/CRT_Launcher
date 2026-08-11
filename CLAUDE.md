@@ -106,8 +106,8 @@ overall spec beyond what's in the code and README right now.
   fire the resolution-toggle hotkey.
 - `display.c/h` — SDL display-mode selection with exact-match-or-windowed-
   fallback logic, plus fullscreen/desktop toggling.
-- `render.c/h` — all drawing: checkerboard background, the hand-rolled
-  bitmap font (`font_data.h`), the game list, and `render_draw_modal_list` —
+- `render.c/h` — all drawing: checkerboard background, the bitmap font
+  (`font_data.h`), the game list, and `render_draw_modal_list` —
   a deliberately generic modal primitive (plain strings in, nothing
   game-specific) meant to be reused for any future overlay, not just the
   version picker it was originally built for.
@@ -200,8 +200,14 @@ overall spec beyond what's in the code and README right now.
   follow-up requests to arrive as small, literal visual tweaks (arrow
   position, spacing, color) — implement those directly rather than
   re-designing the component each time.
-- **The font is a known, intentional placeholder.** 5x5 hand-drawn bitmap in
-  `font_data.h`, only supports `A-Z 0-9 space - : . ( ) > '`. Any other
+- **Two fonts, picked at load time.** `font_data.h` holds a 5x5 (`compact`,
+  the default) and a 7x7 (`galaga88` — `A-Z 0-9` extracted from the Galaga
+  '88 PC Engine ROM at `0x1C000`, punctuation hand-drawn and still marked
+  TODO) set, selected via `[display] font`. Both tables are indexed by
+  `font_glyph_index()`, so a new glyph means adding a slot AND an entry to
+  every table. Metrics come from `BitmapFont.width/height` — nothing in
+  `render.c` may hardcode a glyph size again. Only supports
+  `A-Z 0-9 space - : . ( ) > '`. Any other
   character renders as a small diamond (`FONT_UNKNOWN`) rather than blank —
   do not let unsupported characters silently render as nothing; that's
   indistinguishable from actually-missing data (this bit a real bug: titles

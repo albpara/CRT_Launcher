@@ -34,7 +34,9 @@ static const SDL_Color COLOR_MODAL_BG = {16, 16, 22, 255};
 
 static const char *const APP_TITLE = "CRT LAUNCHER";
 
-SDL_bool render_init(SDL_Window *window, RenderContext *rc) {
+SDL_bool render_init(SDL_Window *window, const AppConfig *cfg, RenderContext *rc) {
+    rc->font = (cfg->font == FONT_STYLE_GALAGA88) ? &FONT_GALAGA88 : &FONT_COMPACT;
+
     /* Nearest-neighbor; must be set before SDL_CreateRenderer. */
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
@@ -72,18 +74,28 @@ static void draw_checkerboard(SDL_Renderer *renderer, int win_w, int win_h) {
     }
 }
 
+/* One character cell, including the 1px inter-glyph gap. */
+static int glyph_advance(const BitmapFont *font, int scale) {
+    return (font->width + 1) * scale;
+}
+
+static int text_line_height(const BitmapFont *font, int scale) {
+    return (font->height + BASE_TEXT_LINE_GAP) * scale;
+}
+
 /* Glyphs drawn as filled rects -- see font_data.h. */
-static void draw_text(SDL_Renderer *renderer, const char *text, int x, int y, int scale, SDL_Color color) {
+static void draw_text(SDL_Renderer *renderer, const BitmapFont *font, const char *text,
+                       int x, int y, int scale, SDL_Color color) {
     int cursor_x = x;
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 
     for (const char *p = text; *p; p++) {
-        const uint8_t *glyph = font_get_glyph(*p);
+        const uint8_t *glyph = font_glyph(font, *p);
 
-        for (int row = 0; row < FONT_GLYPH_HEIGHT; row++) {
+        for (int row = 0; row < font->height; row++) {
             uint8_t bits = glyph[row];
-            for (int col = 0; col < FONT_GLYPH_WIDTH; col++) {
-                int bit = (bits >> (FONT_GLYPH_WIDTH - 1 - col)) & 1;
+            for (int col = 0; col < font->width; col++) {
+                int bit = (bits >> (font->width - 1 - col)) & 1;
                 if (!bit) {
                     continue;
                 }
@@ -96,14 +108,15 @@ static void draw_text(SDL_Renderer *renderer, const char *text, int x, int y, in
             }
         }
 
-        cursor_x += (FONT_GLYPH_WIDTH + 1) * scale;
+        cursor_x += glyph_advance(font, scale);
     }
 }
 
-static void draw_text_with_shadow(SDL_Renderer *renderer, const char *text, int x, int y, int scale, SDL_Color color) {
+static void draw_text_with_shadow(SDL_Renderer *renderer, const BitmapFont *font, const char *text,
+                                   int x, int y, int scale, SDL_Color color) {
     /* Shadow offset scales with the glyphs so it stays visible. */
-    draw_text(renderer, text, x + scale, y + scale, scale, COLOR_TEXT_SHADOW);
-    draw_text(renderer, text, x, y, scale, color);
+    draw_text(renderer, font, text, x + scale, y + scale, scale, COLOR_TEXT_SHADOW);
+    draw_text(renderer, font, text, x, y, scale, color);
 }
 
 /* Largest integer scale that fits the configured low-res reference size
@@ -123,19 +136,20 @@ static int compute_text_scale(int win_w, int win_h, int base_w, int base_h) {
 /* One row: plain shadowed text, or a highlight bar over [bar_x,
    bar_x+bar_w) when selected. `text_color` doubles as the bar fill so
    favorites highlight yellow, system rows gray, etc. */
-static void draw_row(SDL_Renderer *renderer, const char *text, int text_x, int bar_x, int bar_w,
+static void draw_row(SDL_Renderer *renderer, const BitmapFont *font, const char *text,
+                      int text_x, int bar_x, int bar_w,
                       int y, int line_h, int text_scale, SDL_bool selected, SDL_Color text_color) {
-    int text_y_offset = (line_h - FONT_GLYPH_HEIGHT * text_scale) / 2;
+    int text_y_offset = (line_h - font->height * text_scale) / 2;
     int text_y = y + text_y_offset;
 
     if (selected) {
         SDL_Rect bar = {bar_x, y, bar_w, line_h};
         SDL_SetRenderDrawColor(renderer, text_color.r, text_color.g, text_color.b, 255);
         SDL_RenderFillRect(renderer, &bar);
-        draw_text(renderer, text, text_x, text_y, text_scale, COLOR_SELECT_TEXT);
+        draw_text(renderer, font, text, text_x, text_y, text_scale, COLOR_SELECT_TEXT);
     } else {
-        draw_text(renderer, text, text_x + text_scale, text_y + text_scale, text_scale, COLOR_TEXT_SHADOW);
-        draw_text(renderer, text, text_x, text_y, text_scale, text_color);
+        draw_text(renderer, font, text, text_x + text_scale, text_y + text_scale, text_scale, COLOR_TEXT_SHADOW);
+        draw_text(renderer, font, text, text_x, text_y, text_scale, text_color);
     }
 }
 
@@ -144,7 +158,8 @@ static void draw_row(SDL_Renderer *renderer, const char *text, int text_x, int b
    filtered game rows (trailing " >" = multiple versions; favorites
    yellow, sorted first). Shows a "NO GAMES" placeholder when the filter
    leaves nothing. */
-static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, const GameListState *gl,
+static void draw_game_list(SDL_Renderer *renderer, const BitmapFont *font,
+                            const LaunchboxInfo *lb, const GameListState *gl,
                             int win_w, int list_y, int line_h, int visible_rows,
                             int text_scale, int text_margin) {
     int y = list_y;
@@ -169,7 +184,7 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
                          startup_is_enabled() ? "REMOVE FROM STARTUP" : "ADD TO STARTUP");
                 label = startup_label;
             }
-            draw_row(renderer, label, text_margin, 0, win_w, y, line_h,
+            draw_row(renderer, font, label, text_margin, 0, win_w, y, line_h,
                      text_scale, selected, COLOR_SYSTEM);
             y += line_h;
             rows_drawn++;
@@ -185,7 +200,7 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
             char label[LAUNCHBOX_PLATFORM_MAX + 4];
             snprintf(label, sizeof(label), "%s%s", checked ? "X " : "  ", lb->platform_names[p]);
 
-            draw_row(renderer, label, text_margin, 0, win_w, y, line_h, text_scale, selected, COLOR_PLATFORM);
+            draw_row(renderer, font, label, text_margin, 0, win_w, y, line_h, text_scale, selected, COLOR_PLATFORM);
             y += line_h;
             rows_drawn++;
             g++;
@@ -204,7 +219,7 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
                 snprintf(label, sizeof(label), "%s", grp->title);
             }
 
-            draw_row(renderer, label, text_margin, 0, win_w, y, line_h, text_scale, selected, color);
+            draw_row(renderer, font, label, text_margin, 0, win_w, y, line_h, text_scale, selected, color);
             y += line_h;
             rows_drawn++;
             g++;
@@ -212,7 +227,7 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
         }
 
         /* The synthetic non-selectable "NO GAMES" row. */
-        draw_row(renderer, "NO GAMES", text_margin, 0, win_w, y, line_h, text_scale, SDL_FALSE, COLOR_TEXT);
+        draw_row(renderer, font, "NO GAMES", text_margin, 0, win_w, y, line_h, text_scale, SDL_FALSE, COLOR_TEXT);
         y += line_h;
         rows_drawn++;
         g++;
@@ -223,12 +238,14 @@ static void draw_game_list(SDL_Renderer *renderer, const LaunchboxInfo *lb, cons
    one optionally highlighted. Sized to the longest string or
    `min_width_chars`, clamped to the window. `accent_color` themes the
    border/title/text and the selected-row bar. */
-void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int text_scale,
+void render_draw_modal_list(const RenderContext *rc, int win_w, int win_h, int text_scale,
                              const char *title, const char *const *items, int item_count,
                              int selected_index, int min_width_chars, SDL_Color accent_color) {
-    int line_h = FONT_GLYPH_HEIGHT * text_scale + BASE_TEXT_LINE_GAP * text_scale;
+    SDL_Renderer *renderer = rc->renderer;
+    const BitmapFont *font = rc->font;
+    int line_h = text_line_height(font, text_scale);
     int padding = BASE_MODAL_PADDING * text_scale;
-    int glyph_advance = (FONT_GLYPH_WIDTH + 1) * text_scale;
+    int advance = glyph_advance(font, text_scale);
 
     int max_chars = title ? (int)strlen(title) : 0;
     for (int i = 0; i < item_count; i++) {
@@ -243,7 +260,7 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
 
     SDL_bool has_separator = (title != NULL) && (item_count > 0);
 
-    int box_w = max_chars * glyph_advance + padding * 2;
+    int box_w = max_chars * advance + padding * 2;
     int box_h = (item_count + (title ? 1 : 0) + (has_separator ? 1 : 0)) * line_h + padding * 2;
 
     int max_w = win_w - padding * 4;
@@ -275,7 +292,7 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
 
     int y = box_y + padding;
     if (title) {
-        draw_text_with_shadow(renderer, title, box_x + padding, y, text_scale, accent_color);
+        draw_text_with_shadow(renderer, font, title, box_x + padding, y, text_scale, accent_color);
         y += line_h;
     }
 
@@ -287,7 +304,7 @@ void render_draw_modal_list(SDL_Renderer *renderer, int win_w, int win_h, int te
     }
 
     for (int i = 0; i < item_count; i++) {
-        draw_row(renderer, items[i], box_x + padding, box_x, box_w, y, line_h, text_scale, i == selected_index, accent_color);
+        draw_row(renderer, font, items[i], box_x + padding, box_x, box_w, y, line_h, text_scale, i == selected_index, accent_color);
         y += line_h;
     }
 }
@@ -304,6 +321,7 @@ void render_screensaver_frame(RenderContext *rc, const DisplayContext *dc, Starf
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
                    const LaunchboxInfo *lb, GameListState *gl, Starfield *sf) {
     SDL_Renderer *renderer = rc->renderer;
+    const BitmapFont *font = rc->font;
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
@@ -332,22 +350,22 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
     int text_scale = compute_text_scale(dc->width, dc->height, cfg->width, cfg->height);
     int text_margin = BASE_TEXT_MARGIN * text_scale;
-    int line_h = FONT_GLYPH_HEIGHT * text_scale + BASE_TEXT_LINE_GAP * text_scale;
+    int line_h = text_line_height(font, text_scale);
 
     int y = text_margin;
 
     /* Centered app title at 2x scale. */
     int title_scale = text_scale * 2;
-    int title_line_h = FONT_GLYPH_HEIGHT * title_scale + BASE_TEXT_LINE_GAP * title_scale;
-    int title_w = (int)strlen(APP_TITLE) * (FONT_GLYPH_WIDTH + 1) * title_scale;
+    int title_line_h = text_line_height(font, title_scale);
+    int title_w = (int)strlen(APP_TITLE) * glyph_advance(font, title_scale);
     int title_x = (dc->width - title_w) / 2;
-    draw_text_with_shadow(renderer, APP_TITLE, title_x, y, title_scale, COLOR_TEXT);
+    draw_text_with_shadow(renderer, font, APP_TITLE, title_x, y, title_scale, COLOR_TEXT);
     y += title_line_h;
 
     /* Right-aligned game counter. */
-    int game_count_w = (int)strlen(game_count_line) * (FONT_GLYPH_WIDTH + 1) * text_scale;
+    int game_count_w = (int)strlen(game_count_line) * glyph_advance(font, text_scale);
     int game_count_x = dc->width - text_margin - game_count_w;
-    draw_text_with_shadow(renderer, game_count_line, game_count_x, y, text_scale, COLOR_TEXT); y += line_h;
+    draw_text_with_shadow(renderer, font, game_count_line, game_count_x, y, text_scale, COLOR_TEXT); y += line_h;
 
     /* Separator between header and list. */
     SDL_Rect header_sep = {text_margin, y + (line_h - text_scale) / 2,
@@ -361,7 +379,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
         visible_rows = 0;
     }
     gamelist_scroll_into_view(gl, lb, visible_rows);
-    draw_game_list(renderer, lb, gl, dc->width, y, line_h, visible_rows, text_scale, text_margin);
+    draw_game_list(renderer, font, lb, gl, dc->width, y, line_h, visible_rows, text_scale, text_margin);
 
     const LaunchboxGameGroup *selected_grp = (gl->selected_version >= 0) ? gamelist_selected_group(gl, lb) : NULL;
     if (selected_grp) {
@@ -377,7 +395,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
 
         /* Accent matches the row that opened it (yellow for favorites). */
         SDL_Color accent = selected_grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
-        render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
+        render_draw_modal_list(rc, dc->width, dc->height, text_scale,
                                 selected_grp->title, items, item_count, gl->selected_version, 0, accent);
     } else if (gl->system_modal_open) {
         /* Calibration prompts/completion text, owned by main.c. Fixed min
@@ -388,13 +406,13 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
         if (gl->system_modal_hint[0]) {
             items[item_count++] = gl->system_modal_hint;
         }
-        render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
+        render_draw_modal_list(rc, dc->width, dc->height, text_scale,
                                 gamelist_system_entry_labels[gl->selected_group],
                                 items, item_count, -1, SYSTEM_MODAL_WIDTH_CHARS, COLOR_SYSTEM);
     } else if (gl->exit_confirm_open) {
         /* Generic action names (bindings vary); no '?' -- font lacks it. */
         static const char *const items[] = {"PRESS SELECT TO CONFIRM", "PRESS BACK TO GO BACK"};
-        render_draw_modal_list(renderer, dc->width, dc->height, text_scale,
+        render_draw_modal_list(rc, dc->width, dc->height, text_scale,
                                 "EXIT", items, 2, -1, 0, COLOR_EXIT);
     }
 

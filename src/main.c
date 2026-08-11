@@ -238,7 +238,7 @@ int main(int argc, char *argv[]) {
     }
 
     RenderContext render;
-    if (!render_init(display.window, &render)) {
+    if (!render_init(display.window, &cfg, &render)) {
         display_shutdown(&display);
         SDL_Quit();
         return 1;

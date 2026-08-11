@@ -224,6 +224,8 @@ static void config_write_default_file(const char *path) {
         "refresh_rate=60\n"
         "; \"checkerboard\" or \"starfield\" (the Galaga one).\n"
         "background=checkerboard\n"
+        "; \"compact\" (5x5) or \"galaga88\" (7x7, fits less per row).\n"
+        "font=compact\n"
         "screensaver_timeout_seconds=60\n"
         "\n"
         "[input]\n"
@@ -252,6 +254,7 @@ void config_load(const char *path, AppConfig *out) {
     out->height = CONFIG_DEFAULT_HEIGHT;
     out->refresh_rate = CONFIG_DEFAULT_REFRESH;
     out->background = BACKGROUND_CHECKERBOARD;
+    out->font = FONT_STYLE_COMPACT;
     out->screensaver_timeout_ms = CONFIG_DEFAULT_SCREENSAVER_TIMEOUT_MS;
     out->toggle_hotkey = CONFIG_DEFAULT_HOTKEY;
     out->nav_repeat_delay_ms = CONFIG_DEFAULT_NAV_REPEAT_DELAY_MS;
@@ -327,6 +330,15 @@ void config_load(const char *path, AppConfig *out) {
                         out->background = BACKGROUND_CHECKERBOARD;
                         SDL_Log("[config] Unrecognized background '%s', using checkerboard", value);
                     }
+                } else if (strcmp(key, "font") == 0) {
+                    if (SDL_strcasecmp(value, "galaga88") == 0) {
+                        out->font = FONT_STYLE_GALAGA88;
+                    } else if (SDL_strcasecmp(value, "compact") == 0) {
+                        out->font = FONT_STYLE_COMPACT;
+                    } else {
+                        out->font = FONT_STYLE_COMPACT;
+                        SDL_Log("[config] Unrecognized font '%s', using compact", value);
+                    }
                 }
             } else if (strcmp(section, "input") == 0) {
                 if (strcmp(key, "toggle_hotkey") == 0) {
@@ -400,8 +412,9 @@ void config_load(const char *path, AppConfig *out) {
             path, out->width, out->height, out->refresh_rate,
             SDL_GetKeyName(out->toggle_hotkey), out->nav_repeat_delay_ms, out->nav_repeat_interval_ms,
             out->screensaver_timeout_ms, out->screensaver_timeout_ms > 0 ? "" : " (disabled)");
-    SDL_Log("[config] background = %s",
-            out->background == BACKGROUND_CHECKERBOARD ? "checkerboard" : "starfield");
+    SDL_Log("[config] background = %s, font = %s",
+            out->background == BACKGROUND_CHECKERBOARD ? "checkerboard" : "starfield",
+            out->font == FONT_STYLE_GALAGA88 ? "galaga88" : "compact");
     SDL_Log("[config] LaunchBox dir = %s",
             out->launchbox_dir[0] ? out->launchbox_dir : "(not configured)");
     SDL_Log("[config] selected_platforms = %s", out->selected_platforms);

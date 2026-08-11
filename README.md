@@ -84,9 +84,9 @@ keys/Enter/Escape/Shift always work as a hardcoded keyboard fallback.
 
 After a minute without input a Galaga starfield takes over the screen as
 the screensaver; any input wakes it. Set `background=starfield` to have it
-drift behind the list as well, in place of the default checkerboard. See
-the comments in [config.ini](config.ini) for every
-setting.
+drift behind the list as well, in place of the default checkerboard, and
+`font=galaga88` to swap the default 5x5 font for the larger 7x7 Galaga '88
+one. See the comments in [config.ini](config.ini) for every setting.
 
 ## Known limitations
 
@@ -95,7 +95,12 @@ setting.
 - Game launching covers the MAME-style `%romlocation%` command-line
   pattern and direct .exe launches; no AutoHotkey scripts, pause menus, or
   achievements.
-- The 5x5 bitmap font covers `A-Z 0-9 space - : . ( ) > '`; anything else
-  renders as a placeholder diamond.
+- Both bitmap fonts cover `A-Z 0-9 space - : . ( ) > '` and nothing else;
+  anything outside that renders as a placeholder diamond. `galaga88`'s
+  `A-Z 0-9` come from the Galaga '88 (PC Engine) ROM at offset `0x1C000`
+  -- 36 consecutive 8x8 4bpp planar tiles in that order, the only font
+  block in the image, each drawing 7x7 in a single palette index (so the
+  data is really 1-bit). Its punctuation isn't in the ROM and is
+  hand-drawn.
 - Flat list only: no box art, no text search; letter-jump is a linear
   scan (fine at a few thousand titles).
