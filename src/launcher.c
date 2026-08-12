@@ -301,7 +301,10 @@ static SDL_bool is_absolute_windows_path(const char *path) {
    console-subsystem child would otherwise share our console/process
    group, and a console control event on its exit can silently kill the
    launcher too -- observed in practice as the launcher vanishing after
-   returning from a game, with nothing logged. */
+   returning from a game, with nothing logged. CREATE_NO_WINDOW keeps that
+   child's console off screen (mame.exe is subsystem CUI, so Windows would
+   otherwise pop a visible one); it still gets a console of its own, so the
+   isolation above is unaffected. GUI children ignore the flag. */
 static SDL_bool spawn_process(char *full_command_line, const char *working_dir) {
     SDL_Log("[launcher] Launching: %s", full_command_line);
     SDL_Log("[launcher] Working directory: %s", working_dir);
@@ -312,7 +315,8 @@ static SDL_bool spawn_process(char *full_command_line, const char *working_dir) 
     si.cb = sizeof(si);
     SDL_zero(pi);
 
-    BOOL ok = CreateProcessA(NULL, full_command_line, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP,
+    BOOL ok = CreateProcessA(NULL, full_command_line, NULL, NULL, FALSE,
+                              CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
                               NULL, working_dir, &si, &pi);
 
     if (!ok) {
