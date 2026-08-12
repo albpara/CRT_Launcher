@@ -15,6 +15,43 @@
 /* Safety cap; a real cabinet has one encoder. */
 #define MAX_TRACKED_JOYSTICKS 4
 
+#ifdef CRT_LAUNCHER_NO_CONSOLE
+/* The distribution build has no console, so SDL_Log would go nowhere and a
+   cabinet-only problem would be undiagnosable. Mirror it to a file next to
+   the exe instead, truncated each run so it can't grow forever. */
+static FILE *log_file = NULL;
+
+static void log_to_file(void *userdata, int category, SDL_LogPriority priority, const char *message) {
+    (void)userdata;
+    (void)category;
+    (void)priority;
+    if (log_file) {
+        fprintf(log_file, "%s\n", message);
+        fflush(log_file); /* a hard exit must not lose the last lines */
+    }
+}
+
+/* `config_path` is "<exe dir>\config.ini"; the log goes beside it. */
+static void open_log_file(const char *config_path) {
+    char path[CONFIG_DEFAULT_PATH_MAX];
+    snprintf(path, sizeof(path), "%s", config_path);
+
+    char *slash = strrchr(path, '\\');
+    if (slash) {
+        slash[1] = '\0';
+    } else {
+        path[0] = '\0';
+    }
+    strncat(path, "crt_launcher.log", sizeof(path) - strlen(path) - 1);
+
+    log_file = fopen(path, "wb");
+    if (log_file) {
+        SDL_LogSetOutputFunction(log_to_file, NULL);
+        SDL_Log("[main] Logging to '%s'", path);
+    }
+}
+#endif
+
 /* Opens every visible joystick (unopened devices generate no events).
    All open joysticks are treated as one undifferentiated input source. */
 static void open_all_joysticks(SDL_Joystick *joysticks[MAX_TRACKED_JOYSTICKS]) {
@@ -69,6 +106,13 @@ static SDL_bool edge_tick(EdgeState *state, SDL_bool is_held_now) {
 
 /* Axis deadzone (~25% of range), shared with calibration capture. */
 #define JOYSTICK_AXIS_THRESHOLD 8000
+
+/* The launch warp always runs at least MIN (so SELECT visibly registers
+   even on a fast emulator), then until the game takes the foreground.
+   TIMEOUT only catches an emulator that never opens a window, which would
+   otherwise leave us warping with input swallowed. */
+#define LAUNCH_WARP_MIN_MS 2000
+#define LAUNCH_WARP_TIMEOUT_MS 10000
 
 /* Is `b` active this frame? Any open joystick counts. */
 static SDL_bool binding_is_held(const InputBinding *b, const Uint8 *keyboard_state,
@@ -161,6 +205,44 @@ static void prime_inputs_held(InputState *in, Uint32 now, int delay_ms) {
     in->back_edge.held = SDL_TRUE;
 }
 
+/* The launch warp, run right after spawning so it covers the emulator's
+   start-up instead of delaying it. Holds for LAUNCH_WARP_MIN_MS so SELECT
+   visibly registers, then until the game takes the foreground. Input is
+   read and discarded so a still-held SELECT can't act on the list. */
+static void run_launch_warp(RenderContext *render, const DisplayContext *display,
+                             Starfield *starfield) {
+    Uint32 start = SDL_GetTicks();
+    SDL_bool game_up = SDL_FALSE;
+    SDL_bool done = SDL_FALSE;
+
+    starfield_warp_start(starfield);
+    while (!done) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                SDL_PushEvent(&event); /* not ours to swallow */
+                done = SDL_TRUE;
+            } else if (event.type == SDL_WINDOWEVENT &&
+                       (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+                        event.window.event == SDL_WINDOWEVENT_MINIMIZED)) {
+                game_up = SDL_TRUE;
+            }
+        }
+
+        Uint32 elapsed = SDL_GetTicks() - start;
+        if (game_up && elapsed >= LAUNCH_WARP_MIN_MS) {
+            done = SDL_TRUE;
+        } else if (elapsed >= LAUNCH_WARP_TIMEOUT_MS) {
+            SDL_Log("[main] Launch warp gave up after %ums with focus still held", (unsigned)elapsed);
+            done = SDL_TRUE;
+        }
+
+        render_starfield_frame(render, display, starfield);
+    }
+
+    starfield_warp_stop(starfield);
+}
+
 /* Stores one captured binding, advances the calibration step, and on the
    last step commits + saves the set and leaves a dismissible completion
    message up. Shared by all four capture event types. */
@@ -215,6 +297,10 @@ int main(int argc, char *argv[]) {
        CWD there); computed once, reused for every load/save. */
     char config_path[CONFIG_DEFAULT_PATH_MAX];
     config_resolve_default_path(config_path, sizeof(config_path));
+
+#ifdef CRT_LAUNCHER_NO_CONSOLE
+    open_log_file(config_path);
+#endif
 
     AppConfig cfg;
     config_load(config_path, &cfg);
@@ -503,9 +589,17 @@ int main(int argc, char *argv[]) {
                                     const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
 
                                     SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
-                                    if (!launcher_launch(&launcher, ver)) {
+                                    if (launcher_launch(&launcher, ver)) {
+                                        /* CreateProcess returned already, so
+                                           the warp covers start-up rather
+                                           than delaying it. */
+                                        run_launch_warp(&render, &display, &starfield);
+                                    } else {
                                         SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
                                     }
+                                    /* The warp ran with input swallowed;
+                                       don't let it count toward idle. */
+                                    last_activity_time = SDL_GetTicks();
 
                                     /* Close the picker so the app isn't stuck
                                        "inside" it after returning from the game. */
@@ -529,7 +623,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (screensaver_active) {
-            render_screensaver_frame(&render, &display, &starfield);
+            render_starfield_frame(&render, &display, &starfield);
         } else {
             render_frame(&render, &display, &cfg, &launchbox, &gamelist, &starfield);
         }

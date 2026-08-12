@@ -380,7 +380,7 @@ void render_draw_modal_list(const RenderContext *rc, int win_w, int win_h, int t
     }
 }
 
-void render_screensaver_frame(RenderContext *rc, const DisplayContext *dc, Starfield *sf) {
+void render_starfield_frame(RenderContext *rc, const DisplayContext *dc, Starfield *sf) {
     SDL_Renderer *renderer = rc->renderer;
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);

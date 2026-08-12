@@ -37,6 +37,9 @@ add_executable(crt_launcher
 
 if (CRT_LAUNCHER_NO_CONSOLE)
     set_target_properties(crt_launcher PROPERTIES WIN32_EXECUTABLE TRUE)
+    # With no console, SDL_Log has nowhere to go -- main.c redirects it to
+    # a file next to the exe so a cabinet problem is still diagnosable.
+    target_compile_definitions(crt_launcher PRIVATE CRT_LAUNCHER_NO_CONSOLE)
 endif()
 
 # App icon (assets/icon.ico), embedded via a generated .rc resource script.

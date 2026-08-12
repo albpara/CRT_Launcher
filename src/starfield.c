@@ -20,6 +20,12 @@
 #define SCROLL_FAST 60.0f
 #define BLINK_RATE 2.0f /* toggles per second */
 
+/* Launch warp. Cubic ramp so it hangs a moment then bolts, which is what
+   reads as "winding up" rather than a linear slide; it then holds at full
+   speed for as long as the warp is left running. */
+#define WARP_RAMP_MS 900
+#define WARP_MAX_SPEED 24.0f
+
 static Uint16 next_lfsr(Uint16 lfsr) {
     int bit = (lfsr ^ (lfsr >> 3) ^ (lfsr >> 5) ^ (lfsr >> 10)) & 1;
     return (Uint16)((lfsr >> 1) | (bit << 15));
@@ -93,6 +99,18 @@ void starfield_init(Starfield *s) {
     build_palette(s->palette);
 }
 
+void starfield_warp_start(Starfield *s) {
+    s->warp_start = SDL_GetTicks();
+    /* Never 0 -- that's the "not warping" sentinel. */
+    if (s->warp_start == 0) {
+        s->warp_start = 1;
+    }
+}
+
+void starfield_warp_stop(Starfield *s) {
+    s->warp_start = 0;
+}
+
 void starfield_free(Starfield *s) {
     free(s->stars);
     s->stars = NULL;
@@ -114,8 +132,37 @@ void starfield_draw(Starfield *s, SDL_Renderer *renderer, int win_w, int win_h) 
     }
     s->last_time = now;
 
-    s->scroll[0] = fmodf(s->scroll[0] + SCROLL_SLOW * dt, (float)STARFIELD_H);
-    s->scroll[1] = fmodf(s->scroll[1] + SCROLL_FAST * dt, (float)STARFIELD_H);
+    float speed = 1.0f;
+    if (s->warp_start) {
+        float t = (float)(now - s->warp_start) / (float)WARP_RAMP_MS;
+        if (t > 1.0f) {
+            t = 1.0f;
+        }
+        speed = 1.0f + (WARP_MAX_SPEED - 1.0f) * t * t * t;
+    }
+
+    float travel_slow = SCROLL_SLOW * speed * dt;
+    float travel_fast = SCROLL_FAST * speed * dt;
+
+    /* A star covering N pixels this frame is drawn N long, so the streak
+       grows out of the speed itself. Gated on the warp: outside it a star
+       stays exactly one pixel at any resolution, even when a stall makes
+       dt (and so the travel) large for a frame. */
+    int streak_slow = 0;
+    int streak_fast = 0;
+    if (s->warp_start) {
+        streak_slow = (int)travel_slow - 1;
+        streak_fast = (int)travel_fast - 1;
+        if (streak_slow < 0) {
+            streak_slow = 0;
+        }
+        if (streak_fast < 0) {
+            streak_fast = 0;
+        }
+    }
+
+    s->scroll[0] = fmodf(s->scroll[0] + travel_slow, (float)STARFIELD_H);
+    s->scroll[1] = fmodf(s->scroll[1] + travel_fast, (float)STARFIELD_H);
 
     /* One low set (q3) and one high set (q4|2) are lit at a time, so half
        the stars blink -- the hardware latches these on vblank. q4 runs
@@ -135,18 +182,24 @@ void starfield_draw(Starfield *s, SDL_Renderer *renderer, int win_w, int win_h) 
 
     for (int i = 0; i < s->star_count; i++) {
         const StarfieldStar *star = &s->stars[i];
-        if (star->set != set_a && star->set != set_b) {
+        /* Warping lights every set: at hyperspeed a 2Hz blink reads as
+           half the field dropping out rather than as twinkle. */
+        if (!s->warp_start && star->set != set_a && star->set != set_b) {
             continue;
         }
 
-        int scroll = (star->set & 2) ? scroll_fast : scroll_slow;
-        int y = (star->y + scroll) % STARFIELD_H;
-        if (y >= win_h) {
+        SDL_bool fast = (star->set & 2) != 0;
+        int y = (star->y + (fast ? scroll_fast : scroll_slow)) % STARFIELD_H;
+        int streak = fast ? streak_fast : streak_slow;
+        /* The trail is where the star just came from, so it runs upward. */
+        int top = y - streak;
+        if (top >= win_h) {
             continue;
         }
 
         const SDL_Color *c = &s->palette[star->color];
         SDL_SetRenderDrawColor(renderer, c->r, c->g, c->b, 255);
-        SDL_RenderDrawPoint(renderer, star->x, y);
+        /* Endpoints are inclusive, so streak 0 draws a single pixel. */
+        SDL_RenderDrawLine(renderer, star->x, top, star->x, y);
     }
 }

@@ -32,8 +32,9 @@ SDL_bool render_init(SDL_Window *window, const AppConfig *cfg, RenderContext *rc
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
                    const LaunchboxInfo *lb, GameListState *gl, Starfield *sf);
 
-/* The screensaver frame: starfield on black, nothing else. */
-void render_screensaver_frame(RenderContext *rc, const DisplayContext *dc, Starfield *sf);
+/* Starfield on black, nothing else -- the screensaver, and the launch
+   warp's startup screen. */
+void render_starfield_frame(RenderContext *rc, const DisplayContext *dc, Starfield *sf);
 
 /* Generic modal: dim overlay + centered box of plain strings, one
    optionally highlighted (selected_index, -1 for none). min_width_chars 0
