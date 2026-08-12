@@ -15,6 +15,11 @@ typedef struct {
     SDL_Renderer *renderer;
     /* Picked once from cfg->font -- there's no hot-reload. */
     const struct BitmapFont *font;
+    /* Marquee clock for the selected row: which row it's timing, and when
+       that row became selected. Restarted on every selection change so the
+       scroll always begins from the start of the title. */
+    int marquee_row;
+    Uint32 marquee_since;
 } RenderContext;
 
 /* Creates a nearest-neighbor renderer bound to `window`. */
