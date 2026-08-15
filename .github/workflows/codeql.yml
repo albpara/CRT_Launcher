@@ -1,0 +1,47 @@
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, so a new query release gets a run without a push.
+    - cron: "23 4 * * 1"
+
+jobs:
+  analyze:
+    name: analyze c-cpp
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp
+          build-mode: manual
+
+      # Manual rather than autobuild: autobuild has no idea how to drive an
+      # MSYS2/MinGW tree. The extractor traces whatever compiles here, so
+      # this has to be a real build between init and analyze.
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          cmake -B build-codeql -G Ninja
+          cmake --build build-codeql
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:c-cpp

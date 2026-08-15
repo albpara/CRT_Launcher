@@ -1,0 +1,73 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    # Both configs, always: the realistic failure here is one of them
+    # breaking silently while all the work happens in the other.
+    # Quoted because bare ON/OFF are YAML booleans.
+    strategy:
+      fail-fast: false
+      matrix:
+        no_console: ["OFF", "ON"]
+
+    name: no-console=${{ matrix.no_console }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          # Same set the README tells a human to install.
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+
+      - name: Configure
+        # -Werror is CI-only -- CMakeLists deliberately leaves it off so a
+        # warning can never stop a build on the cabinet.
+        # TODO: drop -Wno-error=format-truncation once the four known
+        # truncation warnings (config.c:189, launchbox.c:563,
+        # launcher.c:164, launcher.c:412) are fixed. Until then it's the
+        # difference between catching new warnings and a permanently red CI.
+        run: >-
+          cmake -B build -G Ninja
+          -DCRT_LAUNCHER_NO_CONSOLE=${{ matrix.no_console }}
+          -DCMAKE_C_FLAGS="-Werror -Wno-error=format-truncation"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Verify the distribution exe is self-contained
+        # The ON build's entire point is one file to copy to the cabinet.
+        # MSYS2 ships libSDL2.a, but assert the static path resolved rather
+        # than assume it did.
+        if: matrix.no_console == 'ON'
+        run: |
+          objdump -p build/crt_launcher.exe | grep "DLL Name"
+          if objdump -p build/crt_launcher.exe | grep -qi "SDL2.dll"; then
+            echo "::error::SDL2 linked dynamically -- the distribution build must be static"
+            exit 1
+          fi
+
+      - name: Upload the distribution exe
+        if: matrix.no_console == 'ON'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crt_launcher
+          path: |
+            build/crt_launcher.exe
+            config.ini
