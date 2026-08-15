@@ -71,3 +71,38 @@ jobs:
           path: |
             build/crt_launcher.exe
             config.ini
+
+  # Separate job, not a step in the matrix: the tests cover the parsing
+  # layer, which is identical in both configs, so running them twice would
+  # only cost time.
+  tests:
+    name: tests
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+
+      - name: Configure
+        run: >-
+          cmake -B build-tests -G Ninja
+          -DCRT_LAUNCHER_BUILD_TESTS=ON
+          -DCMAKE_C_FLAGS="-Werror -Wno-error=format-truncation"
+
+      - name: Build
+        run: cmake --build build-tests
+
+      - name: Run
+        run: ctest --test-dir build-tests --output-on-failure
