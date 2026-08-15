@@ -13,6 +13,11 @@ overall spec beyond what's in the code and README right now.
 
 ## Build & test workflow
 
+- Warnings are on (`-Wall -Wextra -Wformat=2 -Wshadow -Wconversion
+  -Wsign-conversion`, or `/W4` under MSVC). The tree is clean apart from
+  four `-Wformat-truncation` hits on path building; keep it that way rather
+  than letting new ones accumulate. No `-Werror` locally — a warning
+  shouldn't stop the cabinet build — CI adds it.
 - Two build directories exist, both intentional — don't merge or delete
   either without asking:
   - `build/` — default config, console-subsystem exe. This is the normal

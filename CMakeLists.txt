@@ -35,6 +35,15 @@ add_executable(crt_launcher
     src/starfield.c
 )
 
+# No -Werror here on purpose: a warning shouldn't stop the cabinet build.
+# CI injects it instead.
+if (MSVC)
+    target_compile_options(crt_launcher PRIVATE /W4)
+else()
+    target_compile_options(crt_launcher PRIVATE
+        -Wall -Wextra -Wformat=2 -Wshadow -Wconversion -Wsign-conversion)
+endif()
+
 if (CRT_LAUNCHER_NO_CONSOLE)
     set_target_properties(crt_launcher PROPERTIES WIN32_EXECUTABLE TRUE)
     # With no console, SDL_Log has nowhere to go -- main.c redirects it to
