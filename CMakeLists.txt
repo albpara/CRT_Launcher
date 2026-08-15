@@ -124,3 +124,41 @@ add_custom_command(TARGET crt_launcher POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/config.ini" "$<TARGET_FILE_DIR:crt_launcher>"
 )
+
+# Opt-in, so the normal build stays a single target:
+#   cmake -B build-tests -G "MinGW Makefiles" -DCRT_LAUNCHER_BUILD_TESTS=ON
+#   cmake --build build-tests && ctest --test-dir build-tests --output-on-failure
+option(CRT_LAUNCHER_BUILD_TESTS "Build the unit tests" OFF)
+
+if (CRT_LAUNCHER_BUILD_TESTS)
+    enable_testing()
+
+    # xml_util.c, launcher.c and gamelist.c are #included by their test file
+    # rather than listed here -- the functions worth covering are static, and
+    # linking them too would duplicate every symbol.
+    add_executable(crt_launcher_tests
+        tests/main.c
+        tests/test_xml_util.c
+        tests/test_launcher.c
+        tests/test_config.c
+        tests/test_gamelist.c
+        tests/test_launchbox.c
+        src/config.c
+        src/launchbox.c
+    )
+    target_include_directories(crt_launcher_tests PRIVATE src)
+    # SDL_MAIN_HANDLED keeps SDL.h from renaming main() to SDL_main.
+    target_compile_definitions(crt_launcher_tests PRIVATE
+        SDL_MAIN_HANDLED
+        CRT_TESTS_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures"
+    )
+
+    if (TARGET SDL2::SDL2)
+        target_link_libraries(crt_launcher_tests PRIVATE SDL2::SDL2)
+    else()
+        target_include_directories(crt_launcher_tests PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(crt_launcher_tests PRIVATE ${SDL2_LIBRARIES})
+    endif()
+
+    add_test(NAME crt_launcher_tests COMMAND crt_launcher_tests)
+endif()

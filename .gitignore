@@ -1,6 +1,7 @@
 # CMake build output (both build variants -- see CLAUDE.md)
 /build/
 /build-noconsole/
+/build-tests/
 
 # Editor/OS cruft
 .vscode/

@@ -18,6 +18,19 @@ overall spec beyond what's in the code and README right now.
   four `-Wformat-truncation` hits on path building; keep it that way rather
   than letting new ones accumulate. No `-Werror` locally — a warning
   shouldn't stop the cabinet build — CI adds it.
+- Tests are opt-in and live in `tests/` (plain assert runner, no
+  framework). They cover the parsing layer, which is where a bug shows up
+  as a *missing game* rather than a crash:
+
+  ```
+  cmake -B build-tests -G "MinGW Makefiles" -DCRT_LAUNCHER_BUILD_TESTS=ON
+  cmake --build build-tests && ctest --test-dir build-tests --output-on-failure
+  ```
+
+  `xml_util.c`, `launcher.c` and `gamelist.c` are `#include`d by their test
+  file rather than linked — the functions worth covering are `static`. Don't
+  de-static them for the tests' benefit. `build-tests/` is gitignored like
+  the other two.
 - Two build directories exist, both intentional — don't merge or delete
   either without asking:
   - `build/` — default config, console-subsystem exe. This is the normal

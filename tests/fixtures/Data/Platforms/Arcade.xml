@@ -1,0 +1,50 @@
+<?xml version="1.0" standalone="yes"?>
+<!-- Comments here deliberately avoid literal tag text: the scanner is a
+     bounded substring search with no notion of comments, so a tag named
+     inside one would be parsed as a real block. -->
+<LaunchBox>
+  <!-- Two Game blocks sharing a DatabaseID: clone grouping, mechanism 1. -->
+  <Game>
+    <Title>Galaga</Title>
+    <DatabaseID>100</DatabaseID>
+    <ID>id-galaga</ID>
+    <ApplicationPath>Roms\galaga.zip</ApplicationPath>
+    <Emulator>emu-mame</Emulator>
+    <Favorite>true</Favorite>
+  </Game>
+  <Game>
+    <Title>Galaga</Title>
+    <DatabaseID>100</DatabaseID>
+    <ID>id-galagab</ID>
+    <ApplicationPath>Roms\galagab.zip</ApplicationPath>
+    <Region>Japan</Region>
+  </Game>
+
+  <!-- An additional application joined by game id: clone grouping,
+       mechanism 2. Note the different emulator field name. -->
+  <Game>
+    <Title>Pac-Man</Title>
+    <DatabaseID>200</DatabaseID>
+    <ID>id-pacman</ID>
+    <ApplicationPath>Roms\pacman.zip</ApplicationPath>
+    <Emulator>emu-mame</Emulator>
+  </Game>
+  <AdditionalApplication>
+    <GameID>id-pacman</GameID>
+    <ApplicationPath>Roms\pacmanjp.zip</ApplicationPath>
+    <Region>Japan</Region>
+  </AdditionalApplication>
+
+  <!-- No database id: falls back to the game id as the grouping key. -->
+  <Game>
+    <Title>Dig Dug</Title>
+    <ID>id-digdug</ID>
+    <ApplicationPath>Roms\digdug.zip</ApplicationPath>
+  </Game>
+
+  <!-- Unresolvable parent: must be skipped, not crash or orphan a group. -->
+  <AdditionalApplication>
+    <GameID>id-does-not-exist</GameID>
+    <ApplicationPath>Roms\ghost.zip</ApplicationPath>
+  </AdditionalApplication>
+</LaunchBox>
