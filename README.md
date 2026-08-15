@@ -102,5 +102,13 @@ one. See the comments in [config.ini](config.ini) for every setting.
   block in the image, each drawing 7x7 in a single palette index (so the
   data is really 1-bit). Its punctuation isn't in the ROM and is
   hand-drawn.
+
+## License
+
+[MIT](LICENSE), with one exception: the `galaga88` font's `A-Z 0-9`
+glyphs are extracted from the PC Engine release of Galaga '88 (not the
+arcade original, which runs on different hardware). Those letterforms are
+Namco's and aren't mine to relicense -- the MIT grant covers this
+project's own code. `compact`, the default font, is unaffected.
 - Flat list only: no box art, no text search; letter-jump is a linear
   scan (fine at a few thousand titles).
