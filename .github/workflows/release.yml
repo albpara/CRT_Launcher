@@ -1,0 +1,72 @@
+name: release
+
+# Tag-driven: `git tag -a 0.2 -m "..." && git push origin 0.2`.
+# Release assets never expire, unlike the build workflow's 90-day
+# artifacts, so this is what identifies a build running on a cabinet.
+# Both patterns, because the repo's existing tag is "0.1" with no prefix
+# and a "v0.2" later shouldn't silently do nothing.
+on:
+  push:
+    tags:
+      - "[0-9]*"
+      - "v[0-9]*"
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+
+      - name: Build the distribution config
+        shell: msys2 {0}
+        # The tag becomes the version in the header and in any config.ini
+        # the app generates.
+        run: |
+          cmake -B build-release -G Ninja \
+            -DCRT_LAUNCHER_NO_CONSOLE=ON \
+            -DCRT_LAUNCHER_VERSION="${{ github.ref_name }}"
+          cmake --build build-release
+
+      - name: Verify the exe is self-contained
+        shell: msys2 {0}
+        run: |
+          objdump -p build-release/crt_launcher.exe | grep "DLL Name"
+          if objdump -p build-release/crt_launcher.exe | grep -qi "SDL2.dll"; then
+            echo "::error::SDL2 linked dynamically -- a release must be one file"
+            exit 1
+          fi
+
+      - name: Package
+        shell: pwsh
+        # Zipped rather than a bare .exe: keeps config.ini alongside it, and
+        # browsers treat a loose downloaded exe worse.
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item build-release/crt_launcher.exe dist/
+          Copy-Item config.ini dist/
+          Compress-Archive -Path dist/* -DestinationPath "crt_launcher-${{ github.ref_name }}.zip"
+
+      - name: Publish
+        shell: pwsh
+        # gh is preinstalled on the runner, so no marketplace action needed.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          "crt_launcher-${{ github.ref_name }}.zip"
+          --title "${{ github.ref_name }}"
+          --generate-notes

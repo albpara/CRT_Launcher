@@ -35,6 +35,30 @@ add_executable(crt_launcher
     src/starfield.c
 )
 
+# Shown in the header and written into a generated config.ini, so the
+# cabinet can say which build it's running. The release workflow passes the
+# tag; a local build falls back to git describe, then "dev". Resolved at
+# configure time, so it only refreshes when CMake re-runs.
+set(CRT_LAUNCHER_VERSION "" CACHE STRING "Version string baked into the build")
+if (NOT CRT_LAUNCHER_VERSION)
+    find_package(Git QUIET)
+    if (GIT_FOUND)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" describe --tags --always --dirty
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE CRT_LAUNCHER_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+    endif()
+endif()
+if (NOT CRT_LAUNCHER_VERSION)
+    set(CRT_LAUNCHER_VERSION "dev")
+endif()
+message(STATUS "CRT Launcher version: ${CRT_LAUNCHER_VERSION}")
+target_compile_definitions(crt_launcher PRIVATE
+    CRT_LAUNCHER_VERSION="${CRT_LAUNCHER_VERSION}")
+
 # No -Werror here on purpose: a warning shouldn't stop the cabinet build.
 # CI injects it instead.
 if (MSVC)

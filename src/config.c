@@ -1,5 +1,10 @@
 #include "config.h"
 
+/* Baked in by CMake; see render.c for the same fallback. */
+#ifndef CRT_LAUNCHER_VERSION
+#define CRT_LAUNCHER_VERSION "dev"
+#endif
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -214,9 +219,10 @@ void config_resolve_default_path(char *out, size_t out_cap) {
    live). Deliberately not a copy of the documented repo config.ini. */
 static void config_write_default_file(const char *path) {
     static const char DEFAULT_CONTENT[] =
-        "; CRT Launcher configuration -- auto-generated because none was found\n"
-        "; next to the exe. Edit values, then just relaunch the app -- no\n"
-        "; rebuild needed.\n"
+        "; CRT Launcher " CRT_LAUNCHER_VERSION " configuration -- auto-generated\n"
+        "; because none was found next to the exe. Edit values, then just\n"
+        "; relaunch the app -- no rebuild needed. The version above records\n"
+        "; which build wrote this file, not which one reads it.\n"
         "\n"
         "[display]\n"
         "width=320\n"
