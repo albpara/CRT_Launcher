@@ -65,12 +65,10 @@ jobs:
           Compress-Archive -Path $folder -DestinationPath "crt-launcher-${{ github.ref_name }}.zip"
 
       - name: Publish
-        shell: pwsh
-        # gh is preinstalled on the runner, so no marketplace action needed.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "${{ github.ref_name }}"
-          "crt-launcher-${{ github.ref_name }}.zip"
-          --title "${{ github.ref_name }}"
-          --generate-notes
+        # Creates the release, or updates the one already there when the tag
+        # was drafted from GitHub's UI -- the case that broke the first run.
+        # Assets are overwritten by default, so a re-run is idempotent.
+        uses: softprops/action-gh-release@v3
+        with:
+          files: crt-launcher-${{ github.ref_name }}.zip
+          generate_release_notes: true
