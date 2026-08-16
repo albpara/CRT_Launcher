@@ -67,15 +67,25 @@ jobs:
             exit 1
           fi
 
+      - name: Stage the artifact
+        # upload-artifact roots the archive at the least common ancestor of
+        # the paths it's handed, so listing build/crt_launcher.exe next to
+        # config.ini buried the exe under build/. Staging both into one
+        # folder makes that ancestor the folder itself.
+        if: matrix.no_console == 'ON'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item build/crt_launcher.exe dist/
+          Copy-Item config.ini dist/
+
       - name: Upload the distribution exe
         id: artifact
         if: matrix.no_console == 'ON'
         uses: actions/upload-artifact@v4
         with:
           name: crt_launcher
-          path: |
-            build/crt_launcher.exe
-            config.ini
+          path: dist/*
 
       - name: Link the build on the PR
         # Only the ON job -- that's the build worth testing on a cabinet.
