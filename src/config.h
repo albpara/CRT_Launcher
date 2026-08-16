@@ -45,6 +45,10 @@ typedef enum {
     INPUT_ACTION_COUNT
 } InputAction;
 
+/* Axis deadzone (~25% of range). Shared by the per-frame resolution in
+   main.c and calibration's capture. */
+#define JOYSTICK_AXIS_THRESHOLD 8000
+
 /* Display names (calibration prompts/logs) and config.ini key names,
    indexed by InputAction. Defined in config.c. */
 extern const char *const INPUT_ACTION_NAMES[INPUT_ACTION_COUNT];

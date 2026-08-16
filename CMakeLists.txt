@@ -33,6 +33,7 @@ add_executable(crt_launcher
     src/launcher.c
     src/startup.c
     src/starfield.c
+    src/calibration.c
 )
 
 # Shown in the header and written into a generated config.ini, so the
