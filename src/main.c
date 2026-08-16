@@ -241,6 +241,98 @@ static void run_launch_warp(RenderContext *render, const DisplayContext *display
     starfield_warp_stop(starfield);
 }
 
+/* Everything the SELECT/BACK dispatch below needs. Grouped only so that
+   dispatch can be a function rather than 80 lines inline; main() still
+   owns the storage. */
+typedef struct {
+    const char *config_path;
+    LaunchboxInfo *launchbox;
+    LauncherDatabase *launcher;
+    GameListState *gamelist;
+    CalibrationState *calibration;
+    RenderContext *render;
+    DisplayContext *display;
+    Starfield *starfield;
+    Uint32 *last_activity_time;
+} AppContext;
+
+/* SELECT on the system rows, a platform checkbox, or a game. */
+static void dispatch_select(AppContext *app, SDL_bool modifier_held) {
+    GameListState *gl = app->gamelist;
+
+    if (gamelist_selected_is_system(gl)) {
+        if (gl->selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
+            /* Immediate toggle; the registry is the only source of truth
+               (see startup.h). */
+            if (startup_is_enabled()) {
+                startup_disable();
+            } else {
+                startup_enable();
+            }
+        } else {
+            SDL_Log("[main] Starting calibration");
+            calibration_begin(app->calibration, gl);
+        }
+        return;
+    }
+
+    if (gamelist_selected_is_platform(gl, app->launchbox)) {
+        int idx = gamelist_selected_platform_index(gl);
+        gamelist_toggle_platform(gl, app->launchbox, idx);
+
+        char csv[CONFIG_SELECTED_PLATFORMS_MAX];
+        gamelist_format_platform_selection(gl, app->launchbox, csv, sizeof(csv));
+        config_save_selected_platforms(app->config_path, csv);
+
+        SDL_Log("[main] Platform '%s' %s", app->launchbox->platform_names[idx],
+                (gl->platform_selected && gl->platform_selected[idx]) ? "enabled" : "disabled");
+        return;
+    }
+
+    const LaunchboxGameGroup *grp = gamelist_selected_group(gl, app->launchbox);
+    if (!grp) {
+        return;
+    }
+    if (modifier_held) {
+        gamelist_toggle_expand(gl, app->launchbox);
+        return;
+    }
+
+    /* Picker closed: launch the default version (versions[version_start]
+       is the primary <Game> entry). Open: launch the focused one. */
+    int version_index = (gl->selected_version >= 0) ? gl->selected_version : 0;
+    const LaunchboxVersion *ver = &app->launchbox->versions[grp->version_start + version_index];
+
+    SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
+    if (launcher_launch(app->launcher, ver)) {
+        /* CreateProcess returned already, so the warp covers start-up
+           rather than delaying it. */
+        run_launch_warp(app->render, app->display, app->starfield);
+    } else {
+        SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
+    }
+    /* The warp ran with input swallowed; don't let it count toward idle. */
+    *app->last_activity_time = SDL_GetTicks();
+
+    /* Close the picker so the app isn't stuck "inside" it after returning
+       from the game. */
+    gl->selected_version = -1;
+}
+
+/* BACK closes whatever is open, or offers to quit at the top level. */
+static void dispatch_back(AppContext *app) {
+    GameListState *gl = app->gamelist;
+
+    if (gl->selected_version >= 0) {
+        gamelist_toggle_expand(gl, app->launchbox);
+    } else if (gl->system_modal_open) {
+        gl->system_modal_open = SDL_FALSE;
+    } else {
+        /* Confirm rather than quit -- BACK is easy to bump on a controller. */
+        gl->exit_confirm_open = SDL_TRUE;
+    }
+}
+
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -322,6 +414,11 @@ int main(int argc, char *argv[]) {
         gamelist.selected_group = 0;
         calibration_begin(&calibration, &gamelist);
     }
+
+    AppContext app = {
+        config_path, &launchbox, &launcher, &gamelist, &calibration,
+        &render, &display, &starfield, &last_activity_time,
+    };
 
     SDL_bool running = SDL_TRUE;
     while (running) {
@@ -459,70 +556,9 @@ int main(int argc, char *argv[]) {
                        both firing together used to corrupt modal state
                        (SELECT opening a modal, same-frame BACK closing it). */
                     if (select_pressed) {
-                        if (gamelist_selected_is_system(&gamelist)) {
-                            if (gamelist.selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
-                                /* Immediate toggle; the registry is the only
-                                   source of truth (see startup.h). */
-                                if (startup_is_enabled()) {
-                                    startup_disable();
-                                } else {
-                                    startup_enable();
-                                }
-                            } else {
-                                SDL_Log("[main] Starting calibration");
-                                calibration_begin(&calibration, &gamelist);
-                            }
-                        } else if (gamelist_selected_is_platform(&gamelist, &launchbox)) {
-                            int idx = gamelist_selected_platform_index(&gamelist);
-                            gamelist_toggle_platform(&gamelist, &launchbox, idx);
-
-                            char csv[CONFIG_SELECTED_PLATFORMS_MAX];
-                            gamelist_format_platform_selection(&gamelist, &launchbox, csv, sizeof(csv));
-                            config_save_selected_platforms(config_path, csv);
-
-                            SDL_Log("[main] Platform '%s' %s", launchbox.platform_names[idx],
-                                    (gamelist.platform_selected && gamelist.platform_selected[idx]) ? "enabled" : "disabled");
-                        } else {
-                            const LaunchboxGameGroup *grp = gamelist_selected_group(&gamelist, &launchbox);
-                            if (grp) {
-                                if (modifier_held) {
-                                    gamelist_toggle_expand(&gamelist, &launchbox);
-                                } else {
-                                    /* Picker closed: launch the default version
-                                       (versions[version_start] is the primary
-                                       <Game> entry). Open: launch the focused one. */
-                                    int version_index = (gamelist.selected_version >= 0) ? gamelist.selected_version : 0;
-                                    const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
-
-                                    SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
-                                    if (launcher_launch(&launcher, ver)) {
-                                        /* CreateProcess returned already, so
-                                           the warp covers start-up rather
-                                           than delaying it. */
-                                        run_launch_warp(&render, &display, &starfield);
-                                    } else {
-                                        SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
-                                    }
-                                    /* The warp ran with input swallowed;
-                                       don't let it count toward idle. */
-                                    last_activity_time = SDL_GetTicks();
-
-                                    /* Close the picker so the app isn't stuck
-                                       "inside" it after returning from the game. */
-                                    gamelist.selected_version = -1;
-                                }
-                            }
-                        }
+                        dispatch_select(&app, modifier_held);
                     } else if (back_pressed) {
-                        if (gamelist.selected_version >= 0) {
-                            gamelist_toggle_expand(&gamelist, &launchbox);
-                        } else if (gamelist.system_modal_open) {
-                            gamelist.system_modal_open = SDL_FALSE;
-                        } else {
-                            /* Confirm rather than quit -- BACK is easy to bump
-                               on a controller. */
-                            gamelist.exit_confirm_open = SDL_TRUE;
-                        }
+                        dispatch_back(&app);
                     }
                 }
             }
