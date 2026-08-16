@@ -483,14 +483,47 @@ static char *read_config_file(const char *path, long *out_len) {
     return data;
 }
 
+/* Writes to a sibling .tmp and moves it into place. Overwriting config.ini
+   directly means a crash, power cut or full disk mid-write leaves it
+   truncated -- on a cabinet that costs the calibration. Any failure leaves
+   the original untouched. */
 static SDL_bool write_config_file(const char *path, const char *data, size_t len, const char *what) {
-    FILE *out = fopen(path, "wb");
+    char tmp_path[CONFIG_DEFAULT_PATH_MAX + 8];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+
+    FILE *out = fopen(tmp_path, "wb");
     if (!out) {
-        SDL_Log("[config] WARNING: could not open '%s' for writing, %s not saved", path, what);
+        SDL_Log("[config] WARNING: could not open '%s' for writing, %s not saved", tmp_path, what);
         return SDL_FALSE;
     }
-    fwrite(data, 1, len, out);
-    fclose(out);
+
+    size_t written = fwrite(data, 1, len, out);
+    /* fclose flushes, so it can fail on a full disk even when fwrite didn't. */
+    if (fclose(out) != 0 || written != len) {
+        SDL_Log("[config] WARNING: writing '%s' failed, %s not saved -- '%s' left as it was",
+                tmp_path, what, path);
+        remove(tmp_path);
+        return SDL_FALSE;
+    }
+
+    SDL_bool replaced;
+#ifdef _WIN32
+    /* rename() won't overwrite an existing file on Windows. */
+    replaced = MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING) ? SDL_TRUE : SDL_FALSE;
+    if (!replaced) {
+        SDL_Log("[config] WARNING: MoveFileEx onto '%s' failed (error %lu)",
+                path, (unsigned long)GetLastError());
+    }
+#else
+    replaced = (rename(tmp_path, path) == 0) ? SDL_TRUE : SDL_FALSE;
+#endif
+
+    if (!replaced) {
+        SDL_Log("[config] WARNING: could not replace '%s', %s not saved", path, what);
+        remove(tmp_path);
+        return SDL_FALSE;
+    }
+
     return SDL_TRUE;
 }
 
