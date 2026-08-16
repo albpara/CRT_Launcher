@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "calibration.h"
 #include "config.h"
 #include "display.h"
 #include "gamelist.h"
@@ -103,9 +104,6 @@ static SDL_bool edge_tick(EdgeState *state, SDL_bool is_held_now) {
     state->held = is_held_now;
     return fired;
 }
-
-/* Axis deadzone (~25% of range), shared with calibration capture. */
-#define JOYSTICK_AXIS_THRESHOLD 8000
 
 /* The launch warp always runs at least MIN (so SELECT visibly registers
    even on a fast emulator), then until the game takes the foreground.
@@ -243,35 +241,144 @@ static void run_launch_warp(RenderContext *render, const DisplayContext *display
     starfield_warp_stop(starfield);
 }
 
-/* Stores one captured binding, advances the calibration step, and on the
-   last step commits + saves the set and leaves a dismissible completion
-   message up. Shared by all four capture event types. */
-static void calibrate_capture(InputBinding captured, InputBinding *calibrate_bindings, int *calibrate_step,
-                               SDL_bool *calibrating, SDL_bool *calibration_done_message,
-                               InputState *in, GameListState *gamelist, AppConfig *cfg,
-                               const char *config_path) {
-    char value[64];
-    input_binding_to_string(&captured, value, sizeof(value));
-    SDL_Log("[main] Calibrated %s = %s", INPUT_ACTION_NAMES[*calibrate_step], value);
+/* CRT burn-in protection. Idle tracking runs regardless of focus
+   (blanking behind a running game is harmless and invisible) and during
+   calibration -- a cabinet parked on the prompt must still blank. */
+typedef struct {
+    Uint32 last_activity;
+    SDL_bool active;
+    int timeout_ms;   /* 0 disables; see AppConfig.screensaver_timeout_ms */
+} ScreensaverState;
 
-    calibrate_bindings[*calibrate_step] = captured;
-    (*calibrate_step)++;
+static void screensaver_init(ScreensaverState *s, int timeout_ms) {
+    s->last_activity = SDL_GetTicks();
+    s->active = SDL_FALSE;
+    s->timeout_ms = timeout_ms;
+}
 
-    if (*calibrate_step >= INPUT_ACTION_COUNT) {
-        memcpy(cfg->bindings, calibrate_bindings, sizeof(cfg->bindings));
-        cfg->bindings_calibrated = SDL_TRUE;
-        config_save_bindings(config_path, cfg->bindings);
-        *calibrating = SDL_FALSE;
-        *calibration_done_message = SDL_TRUE;
-        prime_inputs_held(in, SDL_GetTicks(), cfg->nav_repeat_delay_ms);
-        snprintf(gamelist->system_modal_status, sizeof(gamelist->system_modal_status),
-                 "SAVED - FIND ME AT THE TOP OF THE LIST");
-        gamelist->system_modal_hint[0] = '\0';
+static void screensaver_note_activity(ScreensaverState *s) {
+    s->last_activity = SDL_GetTicks();
+}
+
+/* Wakes it if it was up. SDL_TRUE only when this call is what woke it, so
+   the caller knows to re-prime its input trackers -- the waking press must
+   not also act on the list. */
+static SDL_bool screensaver_wake(ScreensaverState *s) {
+    if (!s->active) {
+        return SDL_FALSE;
+    }
+    SDL_Log("[main] Screensaver dismissed");
+    s->active = SDL_FALSE;
+    s->last_activity = SDL_GetTicks();
+    return SDL_TRUE;
+}
+
+/* Wake without the log line: used on focus gain, where the app is coming
+   back from a launched game rather than responding to a press. */
+static void screensaver_reset(ScreensaverState *s) {
+    s->active = SDL_FALSE;
+    s->last_activity = SDL_GetTicks();
+}
+
+/* Blanks once idle past the timeout. Only called while awake. */
+static void screensaver_tick(ScreensaverState *s, SDL_bool any_input, Uint32 now) {
+    if (any_input) {
+        s->last_activity = now;
+    } else if (s->timeout_ms > 0 && (now - s->last_activity) >= (Uint32)s->timeout_ms) {
+        SDL_Log("[main] Screensaver activated after %dms idle", s->timeout_ms);
+        s->active = SDL_TRUE;
+    }
+}
+
+/* Everything the SELECT/BACK dispatch below needs. Grouped only so that
+   dispatch can be a function rather than 80 lines inline; main() still
+   owns the storage. */
+typedef struct {
+    const char *config_path;
+    LaunchboxInfo *launchbox;
+    LauncherDatabase *launcher;
+    GameListState *gamelist;
+    CalibrationState *calibration;
+    RenderContext *render;
+    DisplayContext *display;
+    Starfield *starfield;
+    ScreensaverState *screensaver;
+} AppContext;
+
+/* SELECT on the system rows, a platform checkbox, or a game. */
+static void dispatch_select(AppContext *app, SDL_bool modifier_held) {
+    GameListState *gl = app->gamelist;
+
+    if (gamelist_selected_is_system(gl)) {
+        if (gl->selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
+            /* Immediate toggle; the registry is the only source of truth
+               (see startup.h). */
+            if (startup_is_enabled()) {
+                startup_disable();
+            } else {
+                startup_enable();
+            }
+        } else {
+            SDL_Log("[main] Starting calibration");
+            calibration_begin(app->calibration, gl);
+        }
+        return;
+    }
+
+    if (gamelist_selected_is_platform(gl, app->launchbox)) {
+        int idx = gamelist_selected_platform_index(gl);
+        gamelist_toggle_platform(gl, app->launchbox, idx);
+
+        char csv[CONFIG_SELECTED_PLATFORMS_MAX];
+        gamelist_format_platform_selection(gl, app->launchbox, csv, sizeof(csv));
+        config_save_selected_platforms(app->config_path, csv);
+
+        SDL_Log("[main] Platform '%s' %s", app->launchbox->platform_names[idx],
+                (gl->platform_selected && gl->platform_selected[idx]) ? "enabled" : "disabled");
+        return;
+    }
+
+    const LaunchboxGameGroup *grp = gamelist_selected_group(gl, app->launchbox);
+    if (!grp) {
+        return;
+    }
+    if (modifier_held) {
+        gamelist_toggle_expand(gl, app->launchbox);
+        return;
+    }
+
+    /* Picker closed: launch the default version (versions[version_start]
+       is the primary <Game> entry). Open: launch the focused one. */
+    int version_index = (gl->selected_version >= 0) ? gl->selected_version : 0;
+    const LaunchboxVersion *ver = &app->launchbox->versions[grp->version_start + version_index];
+
+    SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
+    if (launcher_launch(app->launcher, ver)) {
+        /* CreateProcess returned already, so the warp covers start-up
+           rather than delaying it. */
+        run_launch_warp(app->render, app->display, app->starfield);
     } else {
-        snprintf(gamelist->system_modal_status, sizeof(gamelist->system_modal_status),
-                 "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[*calibrate_step]);
-        snprintf(gamelist->system_modal_hint, sizeof(gamelist->system_modal_hint),
-                 "ESC WILL EXIT CALIBRATION");
+        SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
+    }
+    /* The warp ran with input swallowed; don't let it count toward idle. */
+    screensaver_note_activity(app->screensaver);
+
+    /* Close the picker so the app isn't stuck "inside" it after returning
+       from the game. */
+    gl->selected_version = -1;
+}
+
+/* BACK closes whatever is open, or offers to quit at the top level. */
+static void dispatch_back(AppContext *app) {
+    GameListState *gl = app->gamelist;
+
+    if (gl->selected_version >= 0) {
+        gamelist_toggle_expand(gl, app->launchbox);
+    } else if (gl->system_modal_open) {
+        gl->system_modal_open = SDL_FALSE;
+    } else {
+        /* Confirm rather than quit -- BACK is easy to bump on a controller. */
+        gl->exit_confirm_open = SDL_TRUE;
     }
 }
 
@@ -338,37 +445,25 @@ int main(int argc, char *argv[]) {
 
     InputState input = {0};
 
-    /* CRT burn-in protection -- see AppConfig.screensaver_timeout_ms.
-       Runs regardless of focus (blanking behind a running game is
-       harmless and invisible); regaining focus wakes it, see the
-       SDL_WINDOWEVENT handler. */
-    Uint32 last_activity_time = SDL_GetTicks();
-    SDL_bool screensaver_active = SDL_FALSE;
+    ScreensaverState screensaver;
+    screensaver_init(&screensaver, cfg.screensaver_timeout_ms);
     Starfield starfield;
     starfield_init(&starfield);
 
-    SDL_bool calibrating = SDL_FALSE;
-    SDL_bool calibration_done_message = SDL_FALSE;
-    int calibrate_step = 0;
-    InputBinding calibrate_bindings[INPUT_ACTION_COUNT] = {0};
-    /* Axis events keep firing while held past the threshold -- without
-       this gate one held push would capture several steps. Cleared when
-       the stick returns under the threshold. */
-    SDL_bool axis_needs_release = SDL_FALSE;
+    CalibrationState calibration = {0};
 
     if (!cfg.bindings_calibrated) {
         /* Uncalibrated install -- start in calibration; there's no
            reliable way to navigate to it yet. */
         SDL_Log("[main] No calibration on file -- starting calibration automatically");
-        calibrating = SDL_TRUE;
-        axis_needs_release = SDL_FALSE;
         gamelist.selected_group = 0;
-        gamelist.system_modal_open = SDL_TRUE;
-        snprintf(gamelist.system_modal_status, sizeof(gamelist.system_modal_status),
-                 "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[0]);
-        snprintf(gamelist.system_modal_hint, sizeof(gamelist.system_modal_hint),
-                 "ESC WILL EXIT CALIBRATION");
+        calibration_begin(&calibration, &gamelist);
     }
+
+    AppContext app = {
+        config_path, &launchbox, &launcher, &gamelist, &calibration,
+        &render, &display, &starfield, &screensaver,
+    };
 
     SDL_bool running = SDL_TRUE;
     while (running) {
@@ -386,8 +481,7 @@ int main(int argc, char *argv[]) {
                        (returning to a black screen looks like a hang) and
                        restart the idle timer. Re-hiding the cursor matters
                        too -- the game can leave it visible over us. */
-                    screensaver_active = SDL_FALSE;
-                    last_activity_time = SDL_GetTicks();
+                    screensaver_reset(&screensaver);
                     SDL_ShowCursor(SDL_DISABLE);
                     prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
@@ -405,73 +499,21 @@ int main(int argc, char *argv[]) {
                 (event.type == SDL_JOYAXISMOTION &&
                  (event.jaxis.value > JOYSTICK_AXIS_THRESHOLD || event.jaxis.value < -JOYSTICK_AXIS_THRESHOLD));
             if (is_activity_event) {
-                last_activity_time = SDL_GetTicks();
+                screensaver_note_activity(&screensaver);
             }
 
-            if (screensaver_active) {
-                if (is_activity_event) {
-                    SDL_Log("[main] Screensaver dismissed");
-                    screensaver_active = SDL_FALSE;
+            if (screensaver.active) {
+                if (is_activity_event && screensaver_wake(&screensaver)) {
                     prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
                 /* Event swallowed either way -- the waking press must not
                    also complete a calibration step or toggle resolution. */
-            } else if (calibrating) {
-                /* The next qualifying raw input IS the binding for the
-                   current step; Escape is reserved to cancel. */
-                if (event.type == SDL_KEYDOWN && !event.key.repeat) {
-                    if (event.key.keysym.sym == SDLK_ESCAPE) {
-                        calibrating = SDL_FALSE;
-                        gamelist.system_modal_open = SDL_FALSE;
-                        prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
-                        SDL_Log("[main] Calibration cancelled");
-                    } else {
-                        InputBinding captured;
-                        memset(&captured, 0, sizeof(captured));
-                        captured.type = INPUT_BINDING_KEYBOARD;
-                        captured.key = event.key.keysym.sym;
-                        calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &input, &gamelist, &cfg, config_path);
-                    }
-                } else if (event.type == SDL_JOYBUTTONDOWN) {
-                    InputBinding captured;
-                    memset(&captured, 0, sizeof(captured));
-                    captured.type = INPUT_BINDING_JOY_BUTTON;
-                    captured.joy_button = event.jbutton.button;
-                    calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                       &calibration_done_message, &input, &gamelist, &cfg, config_path);
-                } else if (event.type == SDL_JOYHATMOTION) {
-                    /* Logged unconditionally so "no hat events at all" is
-                       diagnosable from the log. */
-                    SDL_Log("[main] Calibration saw JOYHATMOTION: hat=%d value=%d", event.jhat.hat, event.jhat.value);
-
-                    Uint8 dir = 0;
-                    if (event.jhat.value & SDL_HAT_UP) { dir = SDL_HAT_UP; }
-                    else if (event.jhat.value & SDL_HAT_DOWN) { dir = SDL_HAT_DOWN; }
-                    else if (event.jhat.value & SDL_HAT_LEFT) { dir = SDL_HAT_LEFT; }
-                    else if (event.jhat.value & SDL_HAT_RIGHT) { dir = SDL_HAT_RIGHT; }
-                    if (dir != 0) {
-                        InputBinding captured;
-                        memset(&captured, 0, sizeof(captured));
-                        captured.type = INPUT_BINDING_JOY_HAT;
-                        captured.joy_hat = event.jhat.hat;
-                        captured.joy_hat_direction = dir;
-                        calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &input, &gamelist, &cfg, config_path);
-                    }
-                } else if (event.type == SDL_JOYAXISMOTION) {
-                    if (event.jaxis.value > -JOYSTICK_AXIS_THRESHOLD && event.jaxis.value < JOYSTICK_AXIS_THRESHOLD) {
-                        axis_needs_release = SDL_FALSE;
-                    } else if (!axis_needs_release) {
-                        InputBinding captured;
-                        memset(&captured, 0, sizeof(captured));
-                        captured.type = INPUT_BINDING_JOY_AXIS;
-                        captured.joy_axis = event.jaxis.axis;
-                        captured.joy_axis_direction = (event.jaxis.value > 0) ? 1 : -1;
-                        axis_needs_release = SDL_TRUE;
-                        calibrate_capture(captured, calibrate_bindings, &calibrate_step, &calibrating,
-                                           &calibration_done_message, &input, &gamelist, &cfg, config_path);
-                    }
+            } else if (calibration.active) {
+                SDL_bool was_active = calibration.active;
+                calibration_handle_event(&calibration, &event, &gamelist, &cfg, config_path);
+                if (was_active && !calibration.active) {
+                    /* The press that ended it must not also act on the list. */
+                    prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
             } else if (event.type == SDL_KEYDOWN && !event.key.repeat && event.key.keysym.sym == cfg.toggle_hotkey) {
                 display_toggle(&display);
@@ -496,25 +538,16 @@ int main(int argc, char *argv[]) {
             SDL_bool any_action_held = up_held || down_held || left_held || right_held ||
                                         select_held || back_held || modifier_held;
 
-            if (screensaver_active) {
-                if (any_action_held) {
-                    SDL_Log("[main] Screensaver dismissed");
-                    screensaver_active = SDL_FALSE;
-                    last_activity_time = now;
+            if (screensaver.active) {
+                if (any_action_held && screensaver_wake(&screensaver)) {
                     /* The waking press must not also act on the list. */
                     prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
             } else {
-                if (any_action_held) {
-                    last_activity_time = now;
-                } else if (cfg.screensaver_timeout_ms > 0 &&
-                           (now - last_activity_time) >= (Uint32)cfg.screensaver_timeout_ms) {
-                    SDL_Log("[main] Screensaver activated after %dms idle", cfg.screensaver_timeout_ms);
-                    screensaver_active = SDL_TRUE;
-                }
+                screensaver_tick(&screensaver, any_action_held, now);
             }
 
-            if (!calibrating && !screensaver_active) {
+            if (!calibration.active && !screensaver.active) {
                 if (key_repeat_tick(&input.nav[INPUT_ACTION_UP], up_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
                     gamelist_move(&gamelist, &launchbox, -1);
                 }
@@ -531,11 +564,10 @@ int main(int argc, char *argv[]) {
                 SDL_bool select_pressed = edge_tick(&input.select_edge, select_held);
                 SDL_bool back_pressed = edge_tick(&input.back_edge, back_held);
 
-                if (calibration_done_message) {
+                if (calibration.done_message) {
                     /* Either action dismisses the completion message. */
                     if (select_pressed || back_pressed) {
-                        calibration_done_message = SDL_FALSE;
-                        gamelist.system_modal_open = SDL_FALSE;
+                        calibration_dismiss_message(&calibration, &gamelist);
                     }
                 } else if (gamelist.exit_confirm_open) {
                     if (select_pressed) {
@@ -557,84 +589,15 @@ int main(int argc, char *argv[]) {
                        both firing together used to corrupt modal state
                        (SELECT opening a modal, same-frame BACK closing it). */
                     if (select_pressed) {
-                        if (gamelist_selected_is_system(&gamelist)) {
-                            if (gamelist.selected_group == GAMELIST_SYSTEM_ENTRY_STARTUP) {
-                                /* Immediate toggle; the registry is the only
-                                   source of truth (see startup.h). */
-                                if (startup_is_enabled()) {
-                                    startup_disable();
-                                } else {
-                                    startup_enable();
-                                }
-                            } else {
-                                SDL_Log("[main] Starting calibration");
-                                calibrating = SDL_TRUE;
-                                calibrate_step = 0;
-                                axis_needs_release = SDL_FALSE;
-                                memset(calibrate_bindings, 0, sizeof(calibrate_bindings));
-                                gamelist.system_modal_open = SDL_TRUE;
-                                snprintf(gamelist.system_modal_status, sizeof(gamelist.system_modal_status),
-                                         "PRESS INPUT FOR %s", INPUT_ACTION_NAMES[0]);
-                                snprintf(gamelist.system_modal_hint, sizeof(gamelist.system_modal_hint),
-                                         "ESC WILL EXIT CALIBRATION");
-                            }
-                        } else if (gamelist_selected_is_platform(&gamelist, &launchbox)) {
-                            int idx = gamelist_selected_platform_index(&gamelist);
-                            gamelist_toggle_platform(&gamelist, &launchbox, idx);
-
-                            char csv[CONFIG_SELECTED_PLATFORMS_MAX];
-                            gamelist_format_platform_selection(&gamelist, &launchbox, csv, sizeof(csv));
-                            config_save_selected_platforms(config_path, csv);
-
-                            SDL_Log("[main] Platform '%s' %s", launchbox.platform_names[idx],
-                                    (gamelist.platform_selected && gamelist.platform_selected[idx]) ? "enabled" : "disabled");
-                        } else {
-                            const LaunchboxGameGroup *grp = gamelist_selected_group(&gamelist, &launchbox);
-                            if (grp) {
-                                if (modifier_held) {
-                                    gamelist_toggle_expand(&gamelist, &launchbox);
-                                } else {
-                                    /* Picker closed: launch the default version
-                                       (versions[version_start] is the primary
-                                       <Game> entry). Open: launch the focused one. */
-                                    int version_index = (gamelist.selected_version >= 0) ? gamelist.selected_version : 0;
-                                    const LaunchboxVersion *ver = &launchbox.versions[grp->version_start + version_index];
-
-                                    SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
-                                    if (launcher_launch(&launcher, ver)) {
-                                        /* CreateProcess returned already, so
-                                           the warp covers start-up rather
-                                           than delaying it. */
-                                        run_launch_warp(&render, &display, &starfield);
-                                    } else {
-                                        SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
-                                    }
-                                    /* The warp ran with input swallowed;
-                                       don't let it count toward idle. */
-                                    last_activity_time = SDL_GetTicks();
-
-                                    /* Close the picker so the app isn't stuck
-                                       "inside" it after returning from the game. */
-                                    gamelist.selected_version = -1;
-                                }
-                            }
-                        }
+                        dispatch_select(&app, modifier_held);
                     } else if (back_pressed) {
-                        if (gamelist.selected_version >= 0) {
-                            gamelist_toggle_expand(&gamelist, &launchbox);
-                        } else if (gamelist.system_modal_open) {
-                            gamelist.system_modal_open = SDL_FALSE;
-                        } else {
-                            /* Confirm rather than quit -- BACK is easy to bump
-                               on a controller. */
-                            gamelist.exit_confirm_open = SDL_TRUE;
-                        }
+                        dispatch_back(&app);
                     }
                 }
             }
         }
 
-        if (screensaver_active) {
+        if (screensaver.active) {
             render_starfield_frame(&render, &display, &starfield);
         } else {
             render_frame(&render, &display, &cfg, &launchbox, &gamelist, &starfield);
