@@ -316,6 +316,9 @@ int main(int argc, char *argv[]) {
 
     GameListState gamelist;
     gamelist_init(&gamelist, &launchbox, cfg.selected_platforms);
+    /* Nothing to show and the user hasn't chosen that -- say so up front
+       rather than leaving an unexplained empty list. */
+    gamelist.notice_open = (launchbox.status != LAUNCHBOX_STATUS_LOADED) ? SDL_TRUE : SDL_FALSE;
 
     DisplayContext display;
     if (!display_init(&cfg, &display)) {
@@ -539,6 +542,15 @@ int main(int argc, char *argv[]) {
                         running = SDL_FALSE;
                     } else if (back_pressed) {
                         gamelist.exit_confirm_open = SDL_FALSE;
+                    }
+                } else if (gamelist.notice_open) {
+                    /* After calibration, never before: an uncalibrated
+                       install has both up, and this must not swallow the
+                       press that dismisses the completion message. Either
+                       action closes it, leaving the settings rows behind
+                       it usable. */
+                    if (select_pressed || back_pressed) {
+                        gamelist.notice_open = SDL_FALSE;
                     }
                 } else {
                     /* SELECT and BACK are mutually exclusive per frame --

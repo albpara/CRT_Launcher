@@ -202,7 +202,7 @@ void gamelist_format_platform_selection(const GameListState *state, const Launch
 }
 
 void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta) {
-    if (delta == 0 || state->system_modal_open || state->exit_confirm_open) {
+    if (delta == 0 || state->system_modal_open || state->exit_confirm_open || state->notice_open) {
         /* Nothing underneath an open modal may move -- moving
            selected_group off a system row corrupts render.c's
            gamelist_system_entry_labels[] lookup (crashed once). */
@@ -253,7 +253,8 @@ void gamelist_move(GameListState *state, const LaunchboxInfo *lb, int delta) {
 
 void gamelist_jump_letter(GameListState *state, const LaunchboxInfo *lb, int direction) {
     if (state->visible_group_count <= 0 || gamelist_selected_is_system(state) ||
-        gamelist_selected_is_platform(state, lb) || state->system_modal_open || state->exit_confirm_open) {
+        gamelist_selected_is_platform(state, lb) || state->system_modal_open || state->exit_confirm_open ||
+        state->notice_open) {
         return;
     }
 
@@ -297,7 +298,7 @@ void gamelist_jump_letter(GameListState *state, const LaunchboxInfo *lb, int dir
 
 void gamelist_toggle_expand(GameListState *state, const LaunchboxInfo *lb) {
     if (gamelist_selected_is_system(state) || gamelist_selected_is_platform(state, lb) ||
-        state->system_modal_open || state->exit_confirm_open) {
+        state->system_modal_open || state->exit_confirm_open || state->notice_open) {
         return;
     }
 

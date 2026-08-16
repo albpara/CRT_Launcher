@@ -30,6 +30,9 @@ typedef struct {
     char system_modal_status[64]; /* modal body text, owned by main.c */
     char system_modal_hint[64];   /* optional second line; empty = none */
     SDL_bool exit_confirm_open;   /* "really quit?" modal */
+    /* First-run notice when no LaunchBox was found. Dismissible, so the
+       system rows underneath stay reachable. */
+    SDL_bool notice_open;
     int scroll_offset;            /* topmost drawn row */
 
     /* Per-platform visibility, parallel to lb->platform_names. NULL when

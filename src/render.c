@@ -33,6 +33,7 @@ static const SDL_Color COLOR_FAVORITE = {255, 220, 40, 255};
 static const SDL_Color COLOR_SYSTEM = {140, 140, 150, 255};
 static const SDL_Color COLOR_PLATFORM = {90, 170, 255, 255};
 static const SDL_Color COLOR_EXIT = {255, 70, 70, 255};
+static const SDL_Color COLOR_NOTICE = {80, 230, 230, 255};
 static const SDL_Color COLOR_TEXT_SHADOW = {0, 0, 0, 255};
 static const SDL_Color COLOR_SELECT_TEXT = {10, 10, 15, 255};
 static const SDL_Color COLOR_MODAL_DIM = {0, 0, 0, 180};
@@ -272,7 +273,8 @@ static void draw_game_list(const RenderContext *rc, const LaunchboxInfo *lb, con
             }
             color = grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
         } else {
-            /* The synthetic non-selectable "NO GAMES" row. */
+            /* The synthetic non-selectable "NO GAMES" row. Why the list is
+               empty is explained by the notice modal, not here. */
             snprintf(label, sizeof(label), "NO GAMES");
             color = COLOR_TEXT;
             selected = SDL_FALSE;
@@ -492,6 +494,19 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
         static const char *const items[] = {"PRESS SELECT TO CONFIRM", "PRESS BACK TO GO BACK"};
         render_draw_modal_list(rc, dc->width, dc->height, text_scale,
                                 "EXIT", items, 2, -1, 0, COLOR_EXIT);
+    } else if (gl->notice_open) {
+        /* Last on purpose: on an uncalibrated install this is up at the
+           same time as the calibration prompt, and calibration owns the
+           keypresses -- drawing over it would hide the thing the user is
+           actually operating. It surfaces once calibration closes. */
+        const char *items[3];
+        items[0] = (lb->status == LAUNCHBOX_STATUS_NOT_CONFIGURED)
+                    ? "LAUNCHBOX NOT FOUND AND NO PATH SET"
+                    : "CONFIGURED PATH HAS NO GAME DATA";
+        items[1] = "SET LAUNCHBOX DIR IN CONFIG.INI";
+        items[2] = "PRESS SELECT OR BACK TO CONTINUE";
+        render_draw_modal_list(rc, dc->width, dc->height, text_scale,
+                                "NO GAMES FOUND", items, 3, -1, 0, COLOR_NOTICE);
     }
 
     SDL_RenderPresent(renderer);
