@@ -531,13 +531,7 @@ int main(int argc, char *argv[]) {
                 SDL_bool select_pressed = edge_tick(&input.select_edge, select_held);
                 SDL_bool back_pressed = edge_tick(&input.back_edge, back_held);
 
-                if (gamelist.notice_open) {
-                    /* Either action dismisses it; the settings rows behind
-                       it (CALIBRATE CONTROLS especially) must stay usable. */
-                    if (select_pressed || back_pressed) {
-                        gamelist.notice_open = SDL_FALSE;
-                    }
-                } else if (calibration_done_message) {
+                if (calibration_done_message) {
                     /* Either action dismisses the completion message. */
                     if (select_pressed || back_pressed) {
                         calibration_done_message = SDL_FALSE;
@@ -548,6 +542,15 @@ int main(int argc, char *argv[]) {
                         running = SDL_FALSE;
                     } else if (back_pressed) {
                         gamelist.exit_confirm_open = SDL_FALSE;
+                    }
+                } else if (gamelist.notice_open) {
+                    /* After calibration, never before: an uncalibrated
+                       install has both up, and this must not swallow the
+                       press that dismisses the completion message. Either
+                       action closes it, leaving the settings rows behind
+                       it usable. */
+                    if (select_pressed || back_pressed) {
+                        gamelist.notice_open = SDL_FALSE;
                     }
                 } else {
                     /* SELECT and BACK are mutually exclusive per frame --

@@ -462,18 +462,7 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     draw_game_list(rc, lb, gl, dc->width, y, line_h, visible_rows, text_scale, text_margin);
 
     const LaunchboxGameGroup *selected_grp = (gl->selected_version >= 0) ? gamelist_selected_group(gl, lb) : NULL;
-    if (gl->notice_open) {
-        /* Checked first: on a first run with no LaunchBox this is the only
-           thing worth reading on screen. */
-        const char *items[3];
-        items[0] = (lb->status == LAUNCHBOX_STATUS_NOT_CONFIGURED)
-                    ? "LAUNCHBOX NOT FOUND AND NO PATH SET"
-                    : "CONFIGURED PATH HAS NO GAME DATA";
-        items[1] = "SET LAUNCHBOX DIR IN CONFIG.INI";
-        items[2] = "PRESS SELECT OR BACK TO CONTINUE";
-        render_draw_modal_list(rc, dc->width, dc->height, text_scale,
-                                "NO GAMES FOUND", items, 3, -1, 0, COLOR_NOTICE);
-    } else if (selected_grp) {
+    if (selected_grp) {
         int item_count = selected_grp->version_count;
         if (item_count > MODAL_MAX_ITEMS) {
             item_count = MODAL_MAX_ITEMS;
@@ -505,6 +494,19 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
         static const char *const items[] = {"PRESS SELECT TO CONFIRM", "PRESS BACK TO GO BACK"};
         render_draw_modal_list(rc, dc->width, dc->height, text_scale,
                                 "EXIT", items, 2, -1, 0, COLOR_EXIT);
+    } else if (gl->notice_open) {
+        /* Last on purpose: on an uncalibrated install this is up at the
+           same time as the calibration prompt, and calibration owns the
+           keypresses -- drawing over it would hide the thing the user is
+           actually operating. It surfaces once calibration closes. */
+        const char *items[3];
+        items[0] = (lb->status == LAUNCHBOX_STATUS_NOT_CONFIGURED)
+                    ? "LAUNCHBOX NOT FOUND AND NO PATH SET"
+                    : "CONFIGURED PATH HAS NO GAME DATA";
+        items[1] = "SET LAUNCHBOX DIR IN CONFIG.INI";
+        items[2] = "PRESS SELECT OR BACK TO CONTINUE";
+        render_draw_modal_list(rc, dc->width, dc->height, text_scale,
+                                "NO GAMES FOUND", items, 3, -1, 0, COLOR_NOTICE);
     }
 
     SDL_RenderPresent(renderer);
