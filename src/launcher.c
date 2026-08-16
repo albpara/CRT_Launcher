@@ -226,6 +226,10 @@ static const LauncherEmulatorPlatform *find_platform_mapping(const LauncherDatab
 
 /* "Roms\0.262\springer.zip" -> "springer". */
 static void base_name_without_ext(const char *path, char *out, size_t out_cap) {
+    if (out_cap == 0) {
+        return;  /* the clamp below would underflow to SIZE_MAX */
+    }
+
     const char *base = path;
     for (const char *p = path; *p; p++) {
         if (*p == '\\' || *p == '/') {
@@ -249,6 +253,10 @@ static void base_name_without_ext(const char *path, char *out, size_t out_cap) {
 
 /* Containing directory of `path`; empty if no separator. */
 static void directory_part(const char *path, char *out, size_t out_cap) {
+    if (out_cap == 0) {
+        return;  /* the clamp below would underflow to SIZE_MAX */
+    }
+
     const char *last_sep = NULL;
     for (const char *p = path; *p; p++) {
         if (*p == '\\' || *p == '/') {
