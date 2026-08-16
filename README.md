@@ -61,10 +61,15 @@ the default build for development.
 
 ## Running
 
-Put `config.ini` next to the exe (the build already does; if it's missing
-the app generates a default one) and run `crt_launcher.exe`. If a
-`LaunchBox` folder sits next to the exe's own folder it's auto-detected;
-otherwise set `launchbox_dir` in `config.ini`.
+The release zip contains a `CRT Launcher` folder -- extract it **next to
+your LaunchBox install**, so the two sit side by side, and the database
+is found with no configuration at all.
+
+Anywhere else works too: put `config.ini` next to the exe (the build
+already does; if it's missing the app generates a default one) and run
+`crt_launcher.exe`. Auto-detection only looks for a `LaunchBox` folder
+beside the exe's own folder, so otherwise set `launchbox_dir` in
+`config.ini` -- the app says so on screen when it finds nothing.
 
 ### Controls
 

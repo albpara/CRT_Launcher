@@ -50,17 +50,27 @@ jobs:
             exit 1
           fi
 
+      - name: Package
+        shell: pwsh
+        # The folder inside the zip is the install instruction: extracting
+        # it next to a LaunchBox install puts the exe one level down from
+        # LaunchBox's parent, which is exactly what config.c's sibling
+        # auto-detection looks for. A bare exe would leave the user to
+        # work that out.
+        run: |
+          $folder = "CRT Launcher"
+          New-Item -ItemType Directory -Path $folder | Out-Null
+          Copy-Item build-release/crt_launcher.exe $folder/
+          Copy-Item config.ini $folder/
+          Compress-Archive -Path $folder -DestinationPath "crt-launcher-${{ github.ref_name }}.zip"
+
       - name: Publish
         shell: pwsh
-        # Both files attached directly rather than zipped -- the exe is
-        # statically linked, so it's the only thing most people need and
-        # unzipping just adds a step. gh is preinstalled on the runner, so
-        # no marketplace action is needed.
+        # gh is preinstalled on the runner, so no marketplace action needed.
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "${{ github.ref_name }}"
-          "build-release/crt_launcher.exe"
-          "config.ini"
+          "crt-launcher-${{ github.ref_name }}.zip"
           --title "${{ github.ref_name }}"
           --generate-notes
