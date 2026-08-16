@@ -241,6 +241,55 @@ static void run_launch_warp(RenderContext *render, const DisplayContext *display
     starfield_warp_stop(starfield);
 }
 
+/* CRT burn-in protection. Idle tracking runs regardless of focus
+   (blanking behind a running game is harmless and invisible) and during
+   calibration -- a cabinet parked on the prompt must still blank. */
+typedef struct {
+    Uint32 last_activity;
+    SDL_bool active;
+    int timeout_ms;   /* 0 disables; see AppConfig.screensaver_timeout_ms */
+} ScreensaverState;
+
+static void screensaver_init(ScreensaverState *s, int timeout_ms) {
+    s->last_activity = SDL_GetTicks();
+    s->active = SDL_FALSE;
+    s->timeout_ms = timeout_ms;
+}
+
+static void screensaver_note_activity(ScreensaverState *s) {
+    s->last_activity = SDL_GetTicks();
+}
+
+/* Wakes it if it was up. SDL_TRUE only when this call is what woke it, so
+   the caller knows to re-prime its input trackers -- the waking press must
+   not also act on the list. */
+static SDL_bool screensaver_wake(ScreensaverState *s) {
+    if (!s->active) {
+        return SDL_FALSE;
+    }
+    SDL_Log("[main] Screensaver dismissed");
+    s->active = SDL_FALSE;
+    s->last_activity = SDL_GetTicks();
+    return SDL_TRUE;
+}
+
+/* Wake without the log line: used on focus gain, where the app is coming
+   back from a launched game rather than responding to a press. */
+static void screensaver_reset(ScreensaverState *s) {
+    s->active = SDL_FALSE;
+    s->last_activity = SDL_GetTicks();
+}
+
+/* Blanks once idle past the timeout. Only called while awake. */
+static void screensaver_tick(ScreensaverState *s, SDL_bool any_input, Uint32 now) {
+    if (any_input) {
+        s->last_activity = now;
+    } else if (s->timeout_ms > 0 && (now - s->last_activity) >= (Uint32)s->timeout_ms) {
+        SDL_Log("[main] Screensaver activated after %dms idle", s->timeout_ms);
+        s->active = SDL_TRUE;
+    }
+}
+
 /* Everything the SELECT/BACK dispatch below needs. Grouped only so that
    dispatch can be a function rather than 80 lines inline; main() still
    owns the storage. */
@@ -253,7 +302,7 @@ typedef struct {
     RenderContext *render;
     DisplayContext *display;
     Starfield *starfield;
-    Uint32 *last_activity_time;
+    ScreensaverState *screensaver;
 } AppContext;
 
 /* SELECT on the system rows, a platform checkbox, or a game. */
@@ -312,7 +361,7 @@ static void dispatch_select(AppContext *app, SDL_bool modifier_held) {
         SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
     }
     /* The warp ran with input swallowed; don't let it count toward idle. */
-    *app->last_activity_time = SDL_GetTicks();
+    screensaver_note_activity(app->screensaver);
 
     /* Close the picker so the app isn't stuck "inside" it after returning
        from the game. */
@@ -396,12 +445,8 @@ int main(int argc, char *argv[]) {
 
     InputState input = {0};
 
-    /* CRT burn-in protection -- see AppConfig.screensaver_timeout_ms.
-       Runs regardless of focus (blanking behind a running game is
-       harmless and invisible); regaining focus wakes it, see the
-       SDL_WINDOWEVENT handler. */
-    Uint32 last_activity_time = SDL_GetTicks();
-    SDL_bool screensaver_active = SDL_FALSE;
+    ScreensaverState screensaver;
+    screensaver_init(&screensaver, cfg.screensaver_timeout_ms);
     Starfield starfield;
     starfield_init(&starfield);
 
@@ -417,7 +462,7 @@ int main(int argc, char *argv[]) {
 
     AppContext app = {
         config_path, &launchbox, &launcher, &gamelist, &calibration,
-        &render, &display, &starfield, &last_activity_time,
+        &render, &display, &starfield, &screensaver,
     };
 
     SDL_bool running = SDL_TRUE;
@@ -436,8 +481,7 @@ int main(int argc, char *argv[]) {
                        (returning to a black screen looks like a hang) and
                        restart the idle timer. Re-hiding the cursor matters
                        too -- the game can leave it visible over us. */
-                    screensaver_active = SDL_FALSE;
-                    last_activity_time = SDL_GetTicks();
+                    screensaver_reset(&screensaver);
                     SDL_ShowCursor(SDL_DISABLE);
                     prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
@@ -455,13 +499,11 @@ int main(int argc, char *argv[]) {
                 (event.type == SDL_JOYAXISMOTION &&
                  (event.jaxis.value > JOYSTICK_AXIS_THRESHOLD || event.jaxis.value < -JOYSTICK_AXIS_THRESHOLD));
             if (is_activity_event) {
-                last_activity_time = SDL_GetTicks();
+                screensaver_note_activity(&screensaver);
             }
 
-            if (screensaver_active) {
-                if (is_activity_event) {
-                    SDL_Log("[main] Screensaver dismissed");
-                    screensaver_active = SDL_FALSE;
+            if (screensaver.active) {
+                if (is_activity_event && screensaver_wake(&screensaver)) {
                     prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
                 /* Event swallowed either way -- the waking press must not
@@ -496,25 +538,16 @@ int main(int argc, char *argv[]) {
             SDL_bool any_action_held = up_held || down_held || left_held || right_held ||
                                         select_held || back_held || modifier_held;
 
-            if (screensaver_active) {
-                if (any_action_held) {
-                    SDL_Log("[main] Screensaver dismissed");
-                    screensaver_active = SDL_FALSE;
-                    last_activity_time = now;
+            if (screensaver.active) {
+                if (any_action_held && screensaver_wake(&screensaver)) {
                     /* The waking press must not also act on the list. */
                     prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
                 }
             } else {
-                if (any_action_held) {
-                    last_activity_time = now;
-                } else if (cfg.screensaver_timeout_ms > 0 &&
-                           (now - last_activity_time) >= (Uint32)cfg.screensaver_timeout_ms) {
-                    SDL_Log("[main] Screensaver activated after %dms idle", cfg.screensaver_timeout_ms);
-                    screensaver_active = SDL_TRUE;
-                }
+                screensaver_tick(&screensaver, any_action_held, now);
             }
 
-            if (!calibration.active && !screensaver_active) {
+            if (!calibration.active && !screensaver.active) {
                 if (key_repeat_tick(&input.nav[INPUT_ACTION_UP], up_held, now, cfg.nav_repeat_delay_ms, cfg.nav_repeat_interval_ms)) {
                     gamelist_move(&gamelist, &launchbox, -1);
                 }
@@ -564,7 +597,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        if (screensaver_active) {
+        if (screensaver.active) {
             render_starfield_frame(&render, &display, &starfield);
         } else {
             render_frame(&render, &display, &cfg, &launchbox, &gamelist, &starfield);
