@@ -41,6 +41,12 @@ static const SDL_Color COLOR_MODAL_BG = {16, 16, 22, 255};
 
 static const char *const APP_TITLE = "CRT LAUNCHER";
 
+/* Baked in by CMake (a tag, else git describe, else "dev"). */
+#ifndef CRT_LAUNCHER_VERSION
+#define CRT_LAUNCHER_VERSION "dev"
+#endif
+static const char *const APP_VERSION = CRT_LAUNCHER_VERSION;
+
 SDL_bool render_init(SDL_Window *window, const AppConfig *cfg, RenderContext *rc) {
     rc->font = (cfg->font == FONT_STYLE_GALAGA88) ? &FONT_GALAGA88 : &FONT_COMPACT;
     rc->marquee_row = -1;
@@ -442,7 +448,9 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     draw_text_with_shadow(renderer, font, APP_TITLE, title_x, y, title_scale, COLOR_TEXT);
     y += title_line_h;
 
-    /* Right-aligned game counter. */
+    /* Version left, game counter right, sharing one row. */
+    draw_text_with_shadow(renderer, font, APP_VERSION, text_margin, y, text_scale, COLOR_SYSTEM);
+
     int game_count_w = text_width(font, game_count_line, text_scale);
     int game_count_x = dc->width - text_margin - game_count_w;
     draw_text_with_shadow(renderer, font, game_count_line, game_count_x, y, text_scale, COLOR_TEXT); y += line_h;
