@@ -18,6 +18,10 @@ jobs:
 
     name: no-console=${{ matrix.no_console }}
     runs-on: windows-latest
+    # pull-requests: write is for the download link comment below.
+    permissions:
+      contents: read
+      pull-requests: write
     defaults:
       run:
         shell: msys2 {0}
@@ -64,6 +68,7 @@ jobs:
           fi
 
       - name: Upload the distribution exe
+        id: artifact
         if: matrix.no_console == 'ON'
         uses: actions/upload-artifact@v4
         with:
@@ -71,3 +76,17 @@ jobs:
           path: |
             build/crt_launcher.exe
             config.ini
+
+      - name: Link the build on the PR
+        # Only the ON job -- that's the build worth testing on a cabinet.
+        # --edit-last keeps it to a single comment however many times the
+        # branch is pushed, rather than one per run.
+        if: matrix.no_console == 'ON' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $sha = "${{ github.event.pull_request.head.sha }}".Substring(0, 7)
+          $body = "Build of ``$sha``: [download crt_launcher.exe](${{ steps.artifact.outputs.artifact-url }})" +
+                  "`n`nStatically linked, no console. Unzip next to your LaunchBox folder. Expires in 90 days."
+          gh pr comment ${{ github.event.pull_request.number }} --body "$body" --edit-last --create-if-none
