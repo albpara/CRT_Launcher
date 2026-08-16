@@ -95,8 +95,18 @@ one. See the comments in [config.ini](config.ini) for every setting.
 
 ## Known limitations
 
+- **The LaunchBox database is trusted input.** Emulator paths, command
+  line templates and ROM paths are read from `Data\Emulators.xml` and
+  `Data\Platforms\*.xml`, concatenated, and handed to `CreateProcess`.
+  Anyone who can write those files can run arbitrary code as the cabinet
+  user -- and at sign-in, if the run-at-startup toggle is on. That's the
+  same property LaunchBox itself has and is fine for a single-user
+  cabinet, but it means the database is as trusted as the launcher.
+  Relatedly, a `"` inside a ROM or emulator path breaks the command line
+  quoting; no path in practice has one.
 - The XML "parser" is a bounded substring scanner -- fine for LaunchBox's
-  flat export format, not general XML.
+  flat export format, not general XML. It has no notion of comments
+  either, so a tag named inside an XML comment is parsed as real.
 - Game launching covers the MAME-style `%romlocation%` command-line
   pattern and direct .exe launches; no AutoHotkey scripts, pause menus, or
   achievements.
