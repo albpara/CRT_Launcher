@@ -441,36 +441,89 @@ static SDL_bool is_line_start(const char *data, const char *p) {
 /* Reads `path` fully into a heap buffer (caller frees). Binary mode on
    purpose: Windows' text-mode CRT would turn '\n' back into "\r\n" on a
    read-modify-write round trip, doubling carriage returns. */
-static char *read_config_file(const char *path, long *out_len) {
-    char *data = NULL;
-    long len = 0;
-    FILE *f = fopen(path, "rb");
-    if (f) {
-        fseek(f, 0, SEEK_END);
-        len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        if (len > 0) {
-            data = (char *)malloc((size_t)len + 1);
-            if (data) {
-                size_t read = fread(data, 1, (size_t)len, f);
-                data[read] = '\0';
-                len = (long)read;
-            }
-        }
-        fclose(f);
+/* A write offset that stayed inside `cap`, given snprintf's return (which
+   is the length it wanted, not the length it wrote). */
+static int clamp_offset(int off, size_t cap) {
+    if (off < 0) {
+        return 0;
     }
-    *out_len = data ? len : 0;
+    return (off > (int)cap - 1) ? (int)cap - 1 : off;
+}
+
+/* NULL (and *out_len 0) for a missing, empty or unreadable file -- callers
+   treat that the same as "no existing config". */
+static char *read_config_file(const char *path, long *out_len) {
+    *out_len = 0;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return NULL;
+    }
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long len = ftell(f);
+    if (len <= 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    char *data = (char *)malloc((size_t)len + 1);
+    if (!data) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t read = fread(data, 1, (size_t)len, f);
+    fclose(f);
+    data[read] = '\0';
+    *out_len = (long)read;
     return data;
 }
 
+/* Writes to a sibling .tmp and moves it into place. Overwriting config.ini
+   directly means a crash, power cut or full disk mid-write leaves it
+   truncated -- on a cabinet that costs the calibration. Any failure leaves
+   the original untouched. */
 static SDL_bool write_config_file(const char *path, const char *data, size_t len, const char *what) {
-    FILE *out = fopen(path, "wb");
+    char tmp_path[CONFIG_DEFAULT_PATH_MAX + 8];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+
+    FILE *out = fopen(tmp_path, "wb");
     if (!out) {
-        SDL_Log("[config] WARNING: could not open '%s' for writing, %s not saved", path, what);
+        SDL_Log("[config] WARNING: could not open '%s' for writing, %s not saved", tmp_path, what);
         return SDL_FALSE;
     }
-    fwrite(data, 1, len, out);
-    fclose(out);
+
+    size_t written = fwrite(data, 1, len, out);
+    /* fclose flushes, so it can fail on a full disk even when fwrite didn't. */
+    if (fclose(out) != 0 || written != len) {
+        SDL_Log("[config] WARNING: writing '%s' failed, %s not saved -- '%s' left as it was",
+                tmp_path, what, path);
+        remove(tmp_path);
+        return SDL_FALSE;
+    }
+
+    SDL_bool replaced;
+#ifdef _WIN32
+    /* rename() won't overwrite an existing file on Windows. */
+    replaced = MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING) ? SDL_TRUE : SDL_FALSE;
+    if (!replaced) {
+        SDL_Log("[config] WARNING: MoveFileEx onto '%s' failed (error %lu)",
+                path, (unsigned long)GetLastError());
+    }
+#else
+    replaced = (rename(tmp_path, path) == 0) ? SDL_TRUE : SDL_FALSE;
+#endif
+
+    if (!replaced) {
+        SDL_Log("[config] WARNING: could not replace '%s', %s not saved", path, what);
+        remove(tmp_path);
+        return SDL_FALSE;
+    }
+
     return SDL_TRUE;
 }
 
@@ -486,10 +539,18 @@ SDL_bool config_save_bindings(const char *path, const InputBinding bindings[INPU
         "; again overwrites this whole section. Hand-editing is fine too,\n"
         "; same format: KEYBOARD <key name> | JOYBUTTON <index> |\n"
         "; JOYHAT <hat> <UP|DOWN|LEFT|RIGHT> | JOYAXIS <axis> <POSITIVE|NEGATIVE>\n");
-    for (int a = 0; a < INPUT_ACTION_COUNT && off > 0 && off < (int)sizeof(section); a++) {
+    /* snprintf returns what it *would* have written, so `off` has to be
+       clamped after every call or the next one indexes past `section`. */
+    off = clamp_offset(off, sizeof(section));
+    for (int a = 0; a < INPUT_ACTION_COUNT && off < (int)sizeof(section) - 1; a++) {
         char value[64];
         input_binding_to_string(&bindings[a], value, sizeof(value));
-        off += snprintf(section + off, sizeof(section) - (size_t)off, "%s=%s\n", INPUT_ACTION_CONFIG_KEYS[a], value);
+        int n = snprintf(section + off, sizeof(section) - (size_t)off, "%s=%s\n",
+                          INPUT_ACTION_CONFIG_KEYS[a], value);
+        if (n < 0) {
+            break;
+        }
+        off = clamp_offset(off + n, sizeof(section));
     }
 
     size_t result_cap = (size_t)len + strlen(section) + 16;
@@ -554,7 +615,10 @@ SDL_bool config_save_selected_platforms(const char *path, const char *value) {
     char *data = read_config_file(path, &len);
 
     char new_line[CONFIG_SELECTED_PLATFORMS_MAX + 32];
-    size_t line_len = (size_t)snprintf(new_line, sizeof(new_line), "selected_platforms=%s\n", value);
+    /* Same trap as above: snprintf's return is what it wanted to write, so
+       on truncation this length would run the memcpys below off the end. */
+    size_t line_len = (size_t)clamp_offset(
+        snprintf(new_line, sizeof(new_line), "selected_platforms=%s\n", value), sizeof(new_line));
 
     size_t result_cap = (size_t)len + line_len + 64;
     char *result = (char *)malloc(result_cap);
