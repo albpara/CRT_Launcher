@@ -33,6 +33,7 @@ static const SDL_Color COLOR_FAVORITE = {255, 220, 40, 255};
 static const SDL_Color COLOR_SYSTEM = {140, 140, 150, 255};
 static const SDL_Color COLOR_PLATFORM = {90, 170, 255, 255};
 static const SDL_Color COLOR_EXIT = {255, 70, 70, 255};
+static const SDL_Color COLOR_NOTICE = {80, 230, 230, 255};
 static const SDL_Color COLOR_TEXT_SHADOW = {0, 0, 0, 255};
 static const SDL_Color COLOR_SELECT_TEXT = {10, 10, 15, 255};
 static const SDL_Color COLOR_MODAL_DIM = {0, 0, 0, 180};
@@ -242,23 +243,8 @@ static void draw_game_list(const RenderContext *rc, const LaunchboxInfo *lb, con
     int game_start = platform_end;
     int game_end = game_start + gl->visible_group_count;
 
-    /* An empty list needs to say why: a filter hiding everything and a
-       LaunchBox that was never found look identical otherwise, and the
-       second is the one a first run hits. */
-    const char *empty_lines[3];
-    int empty_count = 0;
-    if (gl->visible_group_count == 0) {
-        if (lb->status == LAUNCHBOX_STATUS_LOADED) {
-            empty_lines[empty_count++] = "NO GAMES";
-        } else {
-            empty_lines[empty_count++] = "NO GAMES FOUND";
-            empty_lines[empty_count++] = (lb->status == LAUNCHBOX_STATUS_NOT_CONFIGURED)
-                                          ? "LAUNCHBOX NOT FOUND AND NO PATH SET"
-                                          : "CONFIGURED PATH HAS NO GAME DATA";
-            empty_lines[empty_count++] = "SET LAUNCHBOX DIR IN CONFIG.INI";
-        }
-    }
-    int total_rows = game_end + empty_count;
+    SDL_bool show_no_games_row = (gl->visible_group_count == 0);
+    int total_rows = show_no_games_row ? game_end + 1 : game_end;
 
     while (rows_drawn < visible_rows && g < total_rows) {
         char label[LAUNCHBOX_TITLE_MAX + 16];
@@ -287,10 +273,10 @@ static void draw_game_list(const RenderContext *rc, const LaunchboxInfo *lb, con
             }
             color = grp->is_favorite ? COLOR_FAVORITE : COLOR_TEXT;
         } else {
-            /* Synthetic non-selectable rows; the explanation under the
-               headline is greyed so it reads as a note, not a game. */
-            snprintf(label, sizeof(label), "%s", empty_lines[g - game_end]);
-            color = (g == game_end) ? COLOR_TEXT : COLOR_SYSTEM;
+            /* The synthetic non-selectable "NO GAMES" row. Why the list is
+               empty is explained by the notice modal, not here. */
+            snprintf(label, sizeof(label), "NO GAMES");
+            color = COLOR_TEXT;
             selected = SDL_FALSE;
         }
 
@@ -476,7 +462,18 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
     draw_game_list(rc, lb, gl, dc->width, y, line_h, visible_rows, text_scale, text_margin);
 
     const LaunchboxGameGroup *selected_grp = (gl->selected_version >= 0) ? gamelist_selected_group(gl, lb) : NULL;
-    if (selected_grp) {
+    if (gl->notice_open) {
+        /* Checked first: on a first run with no LaunchBox this is the only
+           thing worth reading on screen. */
+        const char *items[3];
+        items[0] = (lb->status == LAUNCHBOX_STATUS_NOT_CONFIGURED)
+                    ? "LAUNCHBOX NOT FOUND AND NO PATH SET"
+                    : "CONFIGURED PATH HAS NO GAME DATA";
+        items[1] = "SET LAUNCHBOX DIR IN CONFIG.INI";
+        items[2] = "PRESS SELECT OR BACK TO CONTINUE";
+        render_draw_modal_list(rc, dc->width, dc->height, text_scale,
+                                "NO GAMES FOUND", items, 3, -1, 0, COLOR_NOTICE);
+    } else if (selected_grp) {
         int item_count = selected_grp->version_count;
         if (item_count > MODAL_MAX_ITEMS) {
             item_count = MODAL_MAX_ITEMS;

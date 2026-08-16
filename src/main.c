@@ -316,6 +316,9 @@ int main(int argc, char *argv[]) {
 
     GameListState gamelist;
     gamelist_init(&gamelist, &launchbox, cfg.selected_platforms);
+    /* Nothing to show and the user hasn't chosen that -- say so up front
+       rather than leaving an unexplained empty list. */
+    gamelist.notice_open = (launchbox.status != LAUNCHBOX_STATUS_LOADED) ? SDL_TRUE : SDL_FALSE;
 
     DisplayContext display;
     if (!display_init(&cfg, &display)) {
@@ -528,7 +531,13 @@ int main(int argc, char *argv[]) {
                 SDL_bool select_pressed = edge_tick(&input.select_edge, select_held);
                 SDL_bool back_pressed = edge_tick(&input.back_edge, back_held);
 
-                if (calibration_done_message) {
+                if (gamelist.notice_open) {
+                    /* Either action dismisses it; the settings rows behind
+                       it (CALIBRATE CONTROLS especially) must stay usable. */
+                    if (select_pressed || back_pressed) {
+                        gamelist.notice_open = SDL_FALSE;
+                    }
+                } else if (calibration_done_message) {
                     /* Either action dismisses the completion message. */
                     if (select_pressed || back_pressed) {
                         calibration_done_message = SDL_FALSE;
