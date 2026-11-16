@@ -44,8 +44,8 @@ jobs:
         # -Werror is CI-only -- CMakeLists deliberately leaves it off so a
         # warning can never stop a build on the cabinet.
         # TODO: drop -Wno-error=format-truncation once the four known
-        # truncation warnings (config.c:189, launchbox.c:563,
-        # launcher.c:164, launcher.c:412) are fixed. Until then it's the
+        # truncation warnings (config.c:194, launchbox.c:563,
+        # launcher.c:164, launcher.c:484) are fixed. Until then it's the
         # difference between catching new warnings and a permanently red CI.
         run: >-
           cmake -B build -G Ninja

@@ -105,12 +105,11 @@ static SDL_bool edge_tick(EdgeState *state, SDL_bool is_held_now) {
     return fired;
 }
 
-/* The launch warp always runs at least MIN (so SELECT visibly registers
-   even on a fast emulator), then until the game takes the foreground.
-   TIMEOUT only catches an emulator that never opens a window, which would
-   otherwise leave us warping with input swallowed. */
-#define LAUNCH_WARP_MIN_MS 2000
-#define LAUNCH_WARP_TIMEOUT_MS 10000
+/* With a game on screen all that's left to do is notice it exit. */
+#define GAME_POLL_MS 100
+/* BACK held this long, launcher in front, kills a stuck launch. A hold, not
+   a press: the game may still be saving as its window closes. */
+#define GAME_ABORT_HOLD_MS 2000
 
 /* Is `b` active this frame? Any open joystick counts. */
 static SDL_bool binding_is_held(const InputBinding *b, const Uint8 *keyboard_state,
@@ -203,47 +202,9 @@ static void prime_inputs_held(InputState *in, Uint32 now, int delay_ms) {
     in->back_edge.held = SDL_TRUE;
 }
 
-/* The launch warp, run right after spawning so it covers the emulator's
-   start-up instead of delaying it. Holds for LAUNCH_WARP_MIN_MS so SELECT
-   visibly registers, then until the game takes the foreground. Input is
-   read and discarded so a still-held SELECT can't act on the list. */
-static void run_launch_warp(RenderContext *render, const DisplayContext *display,
-                             Starfield *starfield) {
-    Uint32 start = SDL_GetTicks();
-    SDL_bool game_up = SDL_FALSE;
-    SDL_bool done = SDL_FALSE;
-
-    starfield_warp_start(starfield);
-    while (!done) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                SDL_PushEvent(&event); /* not ours to swallow */
-                done = SDL_TRUE;
-            } else if (event.type == SDL_WINDOWEVENT &&
-                       (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
-                        event.window.event == SDL_WINDOWEVENT_MINIMIZED)) {
-                game_up = SDL_TRUE;
-            }
-        }
-
-        Uint32 elapsed = SDL_GetTicks() - start;
-        if (game_up && elapsed >= LAUNCH_WARP_MIN_MS) {
-            done = SDL_TRUE;
-        } else if (elapsed >= LAUNCH_WARP_TIMEOUT_MS) {
-            SDL_Log("[main] Launch warp gave up after %ums with focus still held", (unsigned)elapsed);
-            done = SDL_TRUE;
-        }
-
-        render_starfield_frame(render, display, starfield);
-    }
-
-    starfield_warp_stop(starfield);
-}
-
-/* CRT burn-in protection. Idle tracking runs regardless of focus
-   (blanking behind a running game is harmless and invisible) and during
-   calibration -- a cabinet parked on the prompt must still blank. */
+/* CRT burn-in protection. Idle tracking isn't gated on focus and runs
+   during calibration -- a cabinet parked on the prompt must still blank.
+   Not during a game: the main loop is parked in run_game_session(). */
 typedef struct {
     Uint32 last_activity;
     SDL_bool active;
@@ -273,13 +234,6 @@ static SDL_bool screensaver_wake(ScreensaverState *s) {
     return SDL_TRUE;
 }
 
-/* Wake without the log line: used on focus gain, where the app is coming
-   back from a launched game rather than responding to a press. */
-static void screensaver_reset(ScreensaverState *s) {
-    s->active = SDL_FALSE;
-    s->last_activity = SDL_GetTicks();
-}
-
 /* Blanks once idle past the timeout. Only called while awake. */
 static void screensaver_tick(ScreensaverState *s, SDL_bool any_input, Uint32 now) {
     if (any_input) {
@@ -303,7 +257,88 @@ typedef struct {
     DisplayContext *display;
     Starfield *starfield;
     ScreensaverState *screensaver;
+    const AppConfig *cfg;
+    InputState *input;
+    SDL_Joystick **joysticks;   /* MAX_TRACKED_JOYSTICKS slots */
 } AppContext;
+
+/* One launched game, start to finish. The screen follows the game's
+   lifetime, never focus -- focus bounces back here whenever an emulator is
+   between windows, and reacting to that is what made launches blink. Warp
+   until the game takes focus, then black and idle until its tree is gone. */
+static void run_game_session(AppContext *app, LauncherChild *child) {
+    Uint32 start = SDL_GetTicks();
+    Uint32 back_up_at = start;   /* last moment BACK was seen released */
+    SDL_bool back_armed = SDL_FALSE;
+    SDL_bool dark = SDL_FALSE;   /* the game has taken focus */
+    SDL_bool was_focused = SDL_TRUE;
+    SDL_bool quitting = SDL_FALSE;
+    int focus_returns = 0;
+
+    display_release(app->display);
+    launcher_child_resume(child);
+    starfield_warp_start(app->starfield);
+
+    /* Once dark, the wait is the loop's only pacing. */
+    while (!quitting && !launcher_child_exited(child, dark ? GAME_POLL_MS : 0)) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                SDL_PushEvent(&event); /* not ours to swallow */
+                quitting = SDL_TRUE;
+            } else if (event.type == SDL_JOYDEVICEADDED) {
+                open_all_joysticks(app->joysticks); /* hot-plug outlives a game */
+            }
+        }
+
+        Uint32 now = SDL_GetTicks();
+        SDL_bool focused = (SDL_GetKeyboardFocus() == app->display->window) ? SDL_TRUE : SDL_FALSE;
+
+        if (!dark && !focused) {
+            SDL_Log("[main] Game took focus after %ums", (unsigned)(now - start));
+            dark = SDL_TRUE;
+            render_blank_frame(app->render);
+        } else if (dark && focused && !was_focused) {
+            focus_returns++;
+            SDL_Log("[main] Focus back here with the game still running (%d so far)", focus_returns);
+        }
+        was_focused = focused;
+
+        /* Armed only by a release seen while in front, so a press carried
+           over from the game can't start the hold. */
+        SDL_bool back_held = (focused && action_is_held(INPUT_ACTION_BACK, app->cfg, SDL_GetKeyboardState(NULL),
+                                                         app->joysticks, MAX_TRACKED_JOYSTICKS))
+                                 ? SDL_TRUE : SDL_FALSE;
+        if (!back_held) {
+            back_armed = focused;
+            back_up_at = now;
+        } else if (back_armed && now - back_up_at >= GAME_ABORT_HOLD_MS) {
+            SDL_Log("[main] BACK held with no game in front -- killing the launch");
+            launcher_child_kill(child);
+            break;
+        }
+
+        if (!dark) {
+            render_starfield_frame(app->render, app->display, app->starfield);
+        } else if (focused) {
+            /* Only on screen between the game's own windows. */
+            render_blank_frame(app->render);
+        }
+    }
+
+    starfield_warp_stop(app->starfield);
+    launcher_child_close(child);
+    SDL_Log("[main] Game session over after %us; focus came back %d time(s) meanwhile",
+            (unsigned)((SDL_GetTicks() - start) / 1000), focus_returns);
+
+    if (!quitting) {
+        display_reclaim(app->display);
+    }
+    /* The press that left the game must not act on the list, nor the
+       session count as idle time. */
+    prime_inputs_held(app->input, SDL_GetTicks(), app->cfg->nav_repeat_delay_ms);
+    screensaver_note_activity(app->screensaver);
+}
 
 /* SELECT on the system rows, a platform checkbox, or a game. */
 static void dispatch_select(AppContext *app, SDL_bool modifier_held) {
@@ -353,15 +388,12 @@ static void dispatch_select(AppContext *app, SDL_bool modifier_held) {
     const LaunchboxVersion *ver = &app->launchbox->versions[grp->version_start + version_index];
 
     SDL_Log("[main] Launching '%s' [%s]", grp->title, ver->label);
-    if (launcher_launch(app->launcher, ver)) {
-        /* CreateProcess returned already, so the warp covers start-up
-           rather than delaying it. */
-        run_launch_warp(app->render, app->display, app->starfield);
+    LauncherChild child;
+    if (launcher_launch(app->launcher, ver, &child)) {
+        run_game_session(app, &child);
     } else {
         SDL_Log("[main] WARNING: failed to launch '%s'", grp->title);
     }
-    /* The warp ran with input swallowed; don't let it count toward idle. */
-    screensaver_note_activity(app->screensaver);
 
     /* Close the picker so the app isn't stuck "inside" it after returning
        from the game. */
@@ -462,7 +494,7 @@ int main(int argc, char *argv[]) {
 
     AppContext app = {
         config_path, &launchbox, &launcher, &gamelist, &calibration,
-        &render, &display, &starfield, &screensaver,
+        &render, &display, &starfield, &screensaver, &cfg, &input, joysticks,
     };
 
     SDL_bool running = SDL_TRUE;
@@ -474,17 +506,6 @@ int main(int argc, char *argv[]) {
             } else if (event.type == SDL_JOYDEVICEADDED) {
                 /* Hot-plug: re-scan opens the new device. */
                 open_all_joysticks(joysticks);
-                continue;
-            } else if (event.type == SDL_WINDOWEVENT) {
-                if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
-                    /* Coming back from a launched game: wake immediately
-                       (returning to a black screen looks like a hang) and
-                       restart the idle timer. Re-hiding the cursor matters
-                       too -- the game can leave it visible over us. */
-                    screensaver_reset(&screensaver);
-                    SDL_ShowCursor(SDL_DISABLE);
-                    prime_inputs_held(&input, SDL_GetTicks(), cfg.nav_repeat_delay_ms);
-                }
                 continue;
             }
 

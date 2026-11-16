@@ -47,13 +47,36 @@ void launcher_load(const char *launchbox_dir, LauncherDatabase *out);
 
 void launcher_free(LauncherDatabase *db);
 
+/* A launched game. The job holds everything the emulator starts in turn,
+   so a stub that spawns the real game and exits isn't "game over"; NULL if
+   Windows refused one. void* keeps windows.h out of this header. */
+typedef struct {
+    void *process;
+    void *thread;   /* its main thread, suspended until launcher_child_resume() */
+    void *job;
+} LauncherChild;
+
 /* Resolves the emulator for `ver` (its own emulator_id, else the
    platform's default), builds the command line (%romlocation% + ROM
-   argument per the emulator's quoting rules), and spawns it. If no
-   emulator resolves and rom_path ends in ".exe", launches it directly
-   instead (LaunchBox's "Windows" platform works this way; the path may be
-   absolute or launchbox_dir-relative). Fire-and-forget: does not wait or
-   verify the game loaded. No AutoHotkey/pause/achievement extras. */
-SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver);
+   argument per the emulator's quoting rules), and spawns it into `child`.
+   If no emulator resolves and rom_path ends in ".exe", launches it
+   directly instead (LaunchBox's "Windows" platform works this way; the
+   path may be absolute or launchbox_dir-relative). The process starts
+   suspended, so the caller can hand the display over before it runs. No
+   AutoHotkey/pause/achievement extras. */
+SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver, LauncherChild *child);
+
+/* Lets the spawned process start running. */
+void launcher_child_resume(LauncherChild *child);
+
+/* Waits up to `timeout_ms`; SDL_TRUE once the game and everything it
+   started have exited. Spends the whole timeout otherwise (paces a poll). */
+SDL_bool launcher_child_exited(const LauncherChild *child, Uint32 timeout_ms);
+
+/* Kills the game and everything it started. */
+void launcher_child_kill(const LauncherChild *child);
+
+/* Releases the handles. A game still running is left alone. */
+void launcher_child_close(LauncherChild *child);
 
 #endif /* CRT_LAUNCHER_H */
