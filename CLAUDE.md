@@ -48,6 +48,13 @@ overall spec beyond what's in the code and README right now.
   combos.
 - Stop any already-running `crt_launcher.exe` before rebuilding — it locks
   the `.exe` and the link step fails silently otherwise (permission denied).
+- A desktop monitor doesn't have the cabinet's mode, so the dev box only
+  ever runs the windowed fallback — and switching it to some other real
+  mode rearranges every open window, so don't do that to test. To run the
+  real borderless path harmlessly, point `[display]` in a scratch copy's
+  `config.ini` at the monitor's *current* mode: `lowres_is_real` goes
+  true and every mode call logs "already at ..., no mode change". An
+  actual mode switch can only be verified on the cabinet (or by the user).
 - The root `config.ini`'s `launchbox_dir` must stay blank when committed —
   it's a personal path, only ever set transiently in the build output
   copies (which are gitignored).
@@ -104,13 +111,53 @@ overall spec beyond what's in the code and README right now.
   poll loop (needed because during calibration there ARE no real bindings
   yet to check `action_is_held()` against, and a joystick-only cabinet --
   exactly the case calibration exists for -- has no keyboard fallback to
-  fall back on either). Waking reuses `prime_edges_held()` so the waking
+  fall back on either). Waking reuses `prime_inputs_held()` so the waking
   press doesn't also act on the list, same reasoning as its calibration
   use -- and while the screensaver's up, the event loop swallows the
   waking event itself too, so it can't also complete a calibration step or
   fire the resolution-toggle hotkey.
-- `display.c/h` — SDL display-mode selection with exact-match-or-windowed-
-  fallback logic, plus fullscreen/desktop toggling.
+  The one nested loop is `run_game_session()`: a launched game owns the
+  screen for its whole lifetime, and the main loop is parked there until
+  it's over. Nothing in `main.c` handles a window focus *event* any more,
+  on purpose. Focus bounces back to the launcher whenever an emulator is
+  between windows during start-up (confirmed with a test exe that
+  re-creates its window), and reacting to that -- which SDL's exclusive
+  fullscreen did, with a display mode set each way -- is what made
+  launches blink. The session hands the display over before the
+  still-suspended emulator runs, draws the warp until the game first takes
+  focus, then sits black (drawing only while it has focus, i.e. between
+  the game's own windows) and polls at 10 Hz until the child's job is
+  empty. Input priming and the idle timer are dealt with once, on return.
+  Holding BACK for 2 s while the launcher has focus kills a launch that
+  never came up -- a hold, not a press, because the emulator may still be
+  saving as its window closes. Don't bring back a `FOCUS_GAINED` handler
+  to detect "back from a game"; the child's lifetime is the fact.
+- `display.c/h` — owns the display mode itself. The configured low-res
+  mode (exact match only) is set with `ChangeDisplaySettingsEx` +
+  `CDS_FULLSCREEN`, the same call SDL makes internally, under a plain
+  borderless window; without that mode it falls back to a normal window
+  of the same pixel size. Deliberately never `SDL_WINDOW_FULLSCREEN`:
+  SDL's exclusive fullscreen binds the mode to focus (minimize + desktop
+  mode on focus loss, ours again on restore, plus an exclusive Direct3D 9
+  device that resets itself back in on the next present), so every focus
+  bounce cost two CRT resyncs. Mode queries go through Win32, not SDL --
+  after a mode change it didn't make, SDL reports the *current* mode as
+  its "desktop mode". `display_release()`/`display_reclaim()` hand the
+  screen to a game and take it back, with the desktop mode in between:
+  RetroArch and stock MAME, as set up in the dev box's LaunchBox copy
+  (windowed fullscreen, CRT switching off, no switchres), never switch
+  modes themselves and would otherwise run at the launcher's 320x240 --
+  unconfirmed for the cabinet's own copy. The F5 toggle moves between the
+  same two states. Windows
+  topmost is not involved -- SDL 2.32 only sets it for
+  `SDL_WINDOW_ALWAYS_ON_TOP`. The borderless window only ever grows: it
+  is sized over the desktop mode at start-up and `display_follow()`
+  stretches it over any mode a game sets, so it already covers the
+  screen whenever a mode change lands and the desktop can't flash in the
+  gap. `width`/`height` are therefore the mode being drawn to, not the
+  window's size. Confirmed from the cabinet: it runs GroovyMAME
+  (switchres on, super-res 2560 wide) and RetroArch in windowed
+  fullscreen with CRT switching off; its desktop is 640x480@30.
 - `render.c/h` — all drawing: checkerboard background, the bitmap font
   (`font_data.h`), the game list, and `render_draw_modal_list` —
   a deliberately generic modal primitive (plain strings in, nothing
@@ -152,7 +199,13 @@ overall spec beyond what's in the code and README right now.
   `SDL_Log` to catch) -- this was observed in practice as the launcher
   vanishing sometime after returning from a game, with the console window
   itself still open. Don't drop this flag without re-confirming the
-  isolation is still needed.
+  isolation is still needed. The spawn is `CREATE_SUSPENDED` and joined
+  to a job object before it runs, returned as a `LauncherChild`: `main.c`
+  resumes it once the display has been handed over, then waits for the
+  whole job rather than the one process, since a launcher stub that
+  starts the real game and exits (`Fightcade2.exe` next to
+  `fc2-electron.exe`) would otherwise read as "game over" at once. The
+  job has no kill-on-close limit, so a game outlives the launcher.
 - `xml_util.c/h` — the substring-XML helpers shared by `launchbox.c` and
   `launcher.c`.
 - `starfield.c/h` — the Galaga (Namco 05XX) starfield: always the
@@ -164,8 +217,11 @@ overall spec beyond what's in the code and README right now.
   LFSR taps/hit-mask/colour bits verified against MAME's
   `starfield_05xx.cpp`; the field is 256 rows tall because the LFSR runs
   256 cycles/line for 256 lines — exactly one full period — which is what
-  makes the scroll wrap seamlessly. Field *width* is the live window
-  width, so the pattern is generated to fit rather than stretched, and
+  makes the scroll wrap seamlessly. A window taller than 256 rows (the
+  launch warp plays in the 640x480 desktop mode) repeats the field
+  downward, which is seamless for the same reason. Field *width* is the
+  live window width, so the pattern is generated to fit rather than
+  stretched, and
   stars stay 1x1 at any resolution (explicit user requirement).
   `starfield_draw()` neither clears nor presents — the caller owns the
   frame, which is what lets it serve as a background layer as well as a
@@ -235,7 +291,7 @@ overall spec beyond what's in the code and README right now.
 - The font (see above) — swap for a real bitmap font pipeline eventually.
 - Game launching — MAME-style `%romlocation%` command-line substitution
   only. No AutoHotkey, pause menus, achievements, or anything beyond
-  spawning the emulator process.
+  spawning the emulator process and waiting for it to exit.
 - The game-list UI — still just a flat scrolling list, no thumbnails/box
   art. Platform *filtering* (checkbox rows) exists now, but there's no
   fast text search, and letter-jump is an O(n) linear scan per keypress

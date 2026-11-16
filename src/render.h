@@ -36,6 +36,9 @@ void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *
    warp's startup screen. */
 void render_starfield_frame(RenderContext *rc, const DisplayContext *dc, Starfield *sf);
 
+/* Plain black -- what sits behind a running game. */
+void render_blank_frame(RenderContext *rc);
+
 /* Generic modal: dim overlay + centered box of plain strings, one
    optionally highlighted (selected_index, -1 for none). min_width_chars 0
    sizes purely from content. Exposed for reuse by future menus. */

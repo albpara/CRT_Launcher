@@ -312,8 +312,9 @@ static SDL_bool is_absolute_windows_path(const char *path) {
    returning from a game, with nothing logged. CREATE_NO_WINDOW keeps that
    child's console off screen (mame.exe is subsystem CUI, so Windows would
    otherwise pop a visible one); it still gets a console of its own, so the
-   isolation above is unaffected. GUI children ignore the flag. */
-static SDL_bool spawn_process(char *full_command_line, const char *working_dir) {
+   isolation above is unaffected. GUI children ignore the flag.
+   CREATE_SUSPENDED holds it until launcher_child_resume(). */
+static SDL_bool spawn_process(char *full_command_line, const char *working_dir, LauncherChild *child) {
     SDL_Log("[launcher] Launching: %s", full_command_line);
     SDL_Log("[launcher] Working directory: %s", working_dir);
 
@@ -324,7 +325,7 @@ static SDL_bool spawn_process(char *full_command_line, const char *working_dir) 
     SDL_zero(pi);
 
     BOOL ok = CreateProcessA(NULL, full_command_line, NULL, NULL, FALSE,
-                              CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+                              CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED,
                               NULL, working_dir, &si, &pi);
 
     if (!ok) {
@@ -333,15 +334,81 @@ static SDL_bool spawn_process(char *full_command_line, const char *working_dir) 
         return SDL_FALSE;
     }
 
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
+    /* Joined while still suspended, so nothing it starts can be missed. */
+    HANDLE job = CreateJobObjectA(NULL, NULL);
+    if (!job || !AssignProcessToJobObject(job, pi.hProcess)) {
+        SDL_Log("[launcher] WARNING: no job object (error %lu) -- tracking only the launched process",
+                (unsigned long)GetLastError());
+        if (job) {
+            CloseHandle(job);
+            job = NULL;
+        }
+    }
+
+    child->process = pi.hProcess;
+    child->thread = pi.hThread;
+    child->job = job;
     return SDL_TRUE;
+}
+
+void launcher_child_resume(LauncherChild *child) {
+    if (child->thread) {
+        ResumeThread((HANDLE)child->thread);
+        CloseHandle((HANDLE)child->thread);
+        child->thread = NULL;
+    }
+}
+
+SDL_bool launcher_child_exited(const LauncherChild *child, Uint32 timeout_ms) {
+    /* Message-aware waits: a focus or display change must reach the caller
+       now, not a poll interval later. */
+    HANDLE process = (HANDLE)child->process;
+    DWORD waited = MsgWaitForMultipleObjects(1, &process, FALSE, timeout_ms, QS_ALLINPUT);
+    if (waited == WAIT_TIMEOUT || waited == WAIT_OBJECT_0 + 1) {
+        return SDL_FALSE;
+    }
+
+    /* The process we spawned is gone, but it may only have been a stub. */
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info;
+    if (child->job &&
+        QueryInformationJobObject((HANDLE)child->job, JobObjectBasicAccountingInformation,
+                                   &info, sizeof(info), NULL) &&
+        info.ActiveProcesses > 0) {
+        /* The wait above no longer blocks, so this one paces the caller. */
+        MsgWaitForMultipleObjects(0, NULL, FALSE, timeout_ms, QS_ALLINPUT);
+        return SDL_FALSE;
+    }
+    return SDL_TRUE;
+}
+
+void launcher_child_kill(const LauncherChild *child) {
+    if (child->job) {
+        TerminateJobObject((HANDLE)child->job, 1);
+    } else {
+        TerminateProcess((HANDLE)child->process, 1);
+    }
+    /* Termination isn't instant; don't reclaim the display under it. */
+    WaitForSingleObject((HANDLE)child->process, 2000);
+}
+
+void launcher_child_close(LauncherChild *child) {
+    if (child->thread) {
+        CloseHandle((HANDLE)child->thread);
+    }
+    if (child->process) {
+        CloseHandle((HANDLE)child->process);
+    }
+    if (child->job) {
+        CloseHandle((HANDLE)child->job);
+    }
+    SDL_zerop(child);
 }
 
 /* Direct launch with no emulator and no arguments -- how LaunchBox's
    "Windows" platform works (ApplicationPath points straight at the exe).
    Working directory is the exe's own folder. */
-static SDL_bool launch_windows_app(const LauncherDatabase *db, const LaunchboxVersion *ver) {
+static SDL_bool launch_windows_app(const LauncherDatabase *db, const LaunchboxVersion *ver,
+                                    LauncherChild *child) {
     char absolute_app_path[LAUNCHER_PATH_MAX * 2];
     if (is_absolute_windows_path(ver->rom_path)) {
         snprintf(absolute_app_path, sizeof(absolute_app_path), "%s", ver->rom_path);
@@ -356,10 +423,12 @@ static SDL_bool launch_windows_app(const LauncherDatabase *db, const LaunchboxVe
     snprintf(full_command_line, sizeof(full_command_line), "\"%s\"", absolute_app_path);
 
     SDL_Log("[launcher] '%s' has no resolvable emulator but ends in .exe -- launching directly", ver->label);
-    return spawn_process(full_command_line, working_dir);
+    return spawn_process(full_command_line, working_dir, child);
 }
 
-SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver) {
+SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver, LauncherChild *child) {
+    SDL_zerop(child);
+
     if (!db->loaded) {
         SDL_Log("[launcher] WARNING: cannot launch '%s' -- Data\\Emulators.xml was not loaded", ver->label);
         return SDL_FALSE;
@@ -382,7 +451,7 @@ SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver
     if (!emu) {
         /* No emulator at all -- maybe a directly launchable Windows app. */
         if (has_exe_extension(ver->rom_path)) {
-            return launch_windows_app(db, ver);
+            return launch_windows_app(db, ver, child);
         }
         SDL_Log("[launcher] WARNING: could not resolve an emulator for platform '%s' (game's emulator id: '%s') "
                 "-- is there a Default EmulatorPlatform mapping for this platform in Emulators.xml?",
@@ -423,12 +492,31 @@ SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver
     char working_dir[LAUNCHER_PATH_MAX * 2];
     directory_part(absolute_app_path, working_dir, sizeof(working_dir));
 
-    return spawn_process(full_command_line, working_dir);
+    return spawn_process(full_command_line, working_dir, child);
 }
 #else
-SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver) {
+SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver, LauncherChild *child) {
     (void)db;
+    SDL_zerop(child);
     SDL_Log("[launcher] WARNING: launching '%s' is only implemented for Windows", ver->label);
     return SDL_FALSE;
+}
+
+void launcher_child_resume(LauncherChild *child) {
+    (void)child;
+}
+
+SDL_bool launcher_child_exited(const LauncherChild *child, Uint32 timeout_ms) {
+    (void)child;
+    (void)timeout_ms;
+    return SDL_TRUE;
+}
+
+void launcher_child_kill(const LauncherChild *child) {
+    (void)child;
+}
+
+void launcher_child_close(LauncherChild *child) {
+    (void)child;
 }
 #endif

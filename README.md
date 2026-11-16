@@ -18,8 +18,11 @@ resolution (e.g. 320x240) with pixel-perfect, unfiltered rendering.
   auto-started on first run.
 - A Galaga starfield screensaver (CRT burn-in protection), which can also
   replace the default checkerboard as the launcher background.
-- Run-at-Windows-startup toggle, exclusive-fullscreen low-res with
-  windowed fallback.
+- Run-at-Windows-startup toggle.
+- Sets the low-res mode itself under a borderless window (windowed
+  fallback where the display lacks it) and hands the screen to each game
+  for exactly as long as it runs, so launches don't fight over the
+  display.
 
 ## How to build
 
@@ -81,6 +84,8 @@ keys/Enter/Escape/Shift always work as a hardcoded keyboard fallback.
 - **SELECT** launches the selected game (its default version).
 - **MODIFIER+SELECT** opens the version picker on `>`-suffixed rows.
 - **BACK** closes modals; at the top level it opens an exit confirmation.
+  Held for two seconds while a launch is stuck (the game never appeared,
+  or hung), it kills that launch.
 - Scrolling up past the top reveals the system menu: CALIBRATE CONTROLS,
   ADD/REMOVE FROM STARTUP, and one checkbox row per platform (SELECT
   toggles it; the choice persists).

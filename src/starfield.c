@@ -191,15 +191,14 @@ void starfield_draw(Starfield *s, SDL_Renderer *renderer, int win_w, int win_h) 
         SDL_bool fast = (star->set & 2) != 0;
         int y = (star->y + (fast ? scroll_fast : scroll_slow)) % STARFIELD_H;
         int streak = fast ? streak_fast : streak_slow;
-        /* The trail is where the star just came from, so it runs upward. */
-        int top = y - streak;
-        if (top >= win_h) {
-            continue;
-        }
 
         const SDL_Color *c = &s->palette[star->color];
         SDL_SetRenderDrawColor(renderer, c->r, c->g, c->b, 255);
-        /* Endpoints are inclusive, so streak 0 draws a single pixel. */
-        SDL_RenderDrawLine(renderer, star->x, top, star->x, y);
+        /* The field repeats every STARFIELD_H rows, so a taller screen is
+           just more copies of it. The trail is where the star came from,
+           so it runs upward; endpoints are inclusive (streak 0 = 1 pixel). */
+        for (int ty = y; ty - streak < win_h; ty += STARFIELD_H) {
+            SDL_RenderDrawLine(renderer, star->x, ty - streak, star->x, ty);
+        }
     }
 }

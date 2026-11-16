@@ -397,6 +397,12 @@ void render_starfield_frame(RenderContext *rc, const DisplayContext *dc, Starfie
     SDL_RenderPresent(renderer);
 }
 
+void render_blank_frame(RenderContext *rc) {
+    SDL_SetRenderDrawColor(rc->renderer, 0, 0, 0, 255);
+    SDL_RenderClear(rc->renderer);
+    SDL_RenderPresent(rc->renderer);
+}
+
 void render_frame(RenderContext *rc, const DisplayContext *dc, const AppConfig *cfg,
                    const LaunchboxInfo *lb, GameListState *gl, Starfield *sf) {
     SDL_Renderer *renderer = rc->renderer;
