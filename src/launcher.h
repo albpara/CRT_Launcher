@@ -70,7 +70,8 @@ SDL_bool launcher_launch(const LauncherDatabase *db, const LaunchboxVersion *ver
 void launcher_child_resume(LauncherChild *child);
 
 /* Waits up to `timeout_ms`; SDL_TRUE once the game and everything it
-   started have exited. Spends the whole timeout otherwise (paces a poll). */
+   started have exited. Otherwise spends the timeout (pacing a poll), but
+   returns early when this thread has window messages to handle. */
 SDL_bool launcher_child_exited(const LauncherChild *child, Uint32 timeout_ms);
 
 /* Kills the game and everything it started. */

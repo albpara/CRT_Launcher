@@ -45,7 +45,7 @@ jobs:
         # warning can never stop a build on the cabinet.
         # TODO: drop -Wno-error=format-truncation once the four known
         # truncation warnings (config.c:194, launchbox.c:563,
-        # launcher.c:164, launcher.c:484) are fixed. Until then it's the
+        # launcher.c:164, launcher.c:489) are fixed. Until then it's the
         # difference between catching new warnings and a permanently red CI.
         run: >-
           cmake -B build -G Ninja

@@ -116,6 +116,21 @@ static void set_desktop_mode(void) {
 }
 #endif
 
+/* Stretches the borderless window over `bounds`. It only ever grows: left
+   as large as the biggest mode seen, it already covers the screen when a
+   mode change lands, so the desktop never shows in the gap before we could
+   react. SDL_TRUE if it had to grow. */
+static SDL_bool cover_bounds(DisplayContext *ctx, const SDL_Rect *bounds) {
+    int w, h;
+    SDL_GetWindowSize(ctx->window, &w, &h);
+    SDL_SetWindowPosition(ctx->window, bounds->x, bounds->y);
+    if (bounds->w <= w && bounds->h <= h) {
+        return SDL_FALSE;
+    }
+    SDL_SetWindowSize(ctx->window, SDL_max(w, bounds->w), SDL_max(h, bounds->h));
+    return SDL_TRUE;
+}
+
 /* Borderless over the whole display, or the fallback's plain low-res-sized
    window. A real mode is always on the primary display, SDL's index 0. */
 static void place_window(DisplayContext *ctx, SDL_bool cover_display) {
@@ -143,8 +158,7 @@ static void place_window(DisplayContext *ctx, SDL_bool cover_display) {
     }
 
     SDL_SetWindowBordered(ctx->window, SDL_FALSE);
-    SDL_SetWindowPosition(ctx->window, bounds.x, bounds.y);
-    SDL_SetWindowSize(ctx->window, bounds.w, bounds.h);
+    cover_bounds(ctx, &bounds);
     ctx->width = bounds.w;
     ctx->height = bounds.h;
 }
@@ -195,9 +209,14 @@ SDL_bool display_init(const AppConfig *cfg, DisplayContext *ctx) {
         return SDL_FALSE;
     }
 
-    if (ctx->lowres_is_real && !set_lowres_mode(cfg)) {
-        SDL_Log("[display] WARNING: could not set the low-res mode -- falling back");
-        ctx->lowres_is_real = SDL_FALSE;
+    if (ctx->lowres_is_real) {
+        /* Sized over the desktop mode before leaving it, so a launch that
+           hands that mode back finds the screen already covered. */
+        place_window(ctx, SDL_TRUE);
+        if (!set_lowres_mode(cfg)) {
+            SDL_Log("[display] WARNING: could not set the low-res mode -- falling back");
+            ctx->lowres_is_real = SDL_FALSE;
+        }
     }
 
     place_window(ctx, ctx->lowres_is_real);
@@ -221,6 +240,19 @@ void display_release(DisplayContext *ctx) {
     if (ctx->lowres_is_real && ctx->mode == DISPLAY_MODE_LOWRES) {
         enter_mode(ctx, DISPLAY_MODE_DESKTOP);
     }
+}
+
+SDL_bool display_follow(DisplayContext *ctx) {
+    SDL_Rect bounds;
+    int w, h;
+    SDL_GetWindowSize(ctx->window, &w, &h);
+    if (!ctx->lowres_is_real || SDL_GetDisplayBounds(0, &bounds) != 0 ||
+        (bounds.w <= w && bounds.h <= h)) {
+        return SDL_FALSE;
+    }
+    cover_bounds(ctx, &bounds);
+    SDL_Log("[display] Game set a %dx%d mode, window grown to cover it", bounds.w, bounds.h);
+    return SDL_TRUE;
 }
 
 void display_reclaim(DisplayContext *ctx) {

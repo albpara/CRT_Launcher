@@ -150,7 +150,14 @@ overall spec beyond what's in the code and README right now.
   unconfirmed for the cabinet's own copy. The F5 toggle moves between the
   same two states. Windows
   topmost is not involved -- SDL 2.32 only sets it for
-  `SDL_WINDOW_ALWAYS_ON_TOP`.
+  `SDL_WINDOW_ALWAYS_ON_TOP`. The borderless window only ever grows: it
+  is sized over the desktop mode at start-up and `display_follow()`
+  stretches it over any mode a game sets, so it already covers the
+  screen whenever a mode change lands and the desktop can't flash in the
+  gap. `width`/`height` are therefore the mode being drawn to, not the
+  window's size. Confirmed from the cabinet: it runs GroovyMAME
+  (switchres on, super-res 2560 wide) and RetroArch in windowed
+  fullscreen with CRT switching off; its desktop is 640x480@30.
 - `render.c/h` — all drawing: checkerboard background, the bitmap font
   (`font_data.h`), the game list, and `render_draw_modal_list` —
   a deliberately generic modal primitive (plain strings in, nothing
@@ -210,8 +217,11 @@ overall spec beyond what's in the code and README right now.
   LFSR taps/hit-mask/colour bits verified against MAME's
   `starfield_05xx.cpp`; the field is 256 rows tall because the LFSR runs
   256 cycles/line for 256 lines — exactly one full period — which is what
-  makes the scroll wrap seamlessly. Field *width* is the live window
-  width, so the pattern is generated to fit rather than stretched, and
+  makes the scroll wrap seamlessly. A window taller than 256 rows (the
+  launch warp plays in the 640x480 desktop mode) repeats the field
+  downward, which is seamless for the same reason. Field *width* is the
+  live window width, so the pattern is generated to fit rather than
+  stretched, and
   stars stay 1x1 at any resolution (explicit user requirement).
   `starfield_draw()` neither clears nor presents — the caller owns the
   frame, which is what lets it serve as a background layer as well as a

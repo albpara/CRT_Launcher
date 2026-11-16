@@ -275,6 +275,10 @@ static void run_game_session(AppContext *app, LauncherChild *child) {
     SDL_bool quitting = SDL_FALSE;
     int focus_returns = 0;
 
+    /* The mode change puts our last frame on screen at the new size, so
+       make that frame black. Twice: the compositor runs a frame behind. */
+    render_blank_frame(app->render);
+    render_blank_frame(app->render);
     display_release(app->display);
     launcher_child_resume(child);
     starfield_warp_start(app->starfield);
@@ -303,6 +307,7 @@ static void run_game_session(AppContext *app, LauncherChild *child) {
             SDL_Log("[main] Focus back here with the game still running (%d so far)", focus_returns);
         }
         was_focused = focused;
+        SDL_bool grew = display_follow(app->display);
 
         /* Armed only by a release seen while in front, so a press carried
            over from the game can't start the hold. */
@@ -320,7 +325,7 @@ static void run_game_session(AppContext *app, LauncherChild *child) {
 
         if (!dark) {
             render_starfield_frame(app->render, app->display, app->starfield);
-        } else if (focused) {
+        } else if (focused || grew) {
             /* Only on screen between the game's own windows. */
             render_blank_frame(app->render);
         }

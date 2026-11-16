@@ -15,8 +15,8 @@ typedef struct {
     AppConfig cfg;
 
     DisplayMode mode;
-    int width;      /* current window client size in pixels */
-    int height;
+    int width;      /* size of the mode being drawn to; the window itself */
+    int height;     /* may be larger -- it only grows, see display.c */
 
     /* SDL_TRUE if low-res is a real display mode, which we then set
        ourselves; SDL_FALSE when faked with a plain window because the
@@ -39,6 +39,11 @@ void display_toggle(DisplayContext *ctx);
    emulator that never switches modes itself doesn't inherit ours. Call
    before the game runs; pair with display_reclaim() once it has exited. */
 void display_release(DisplayContext *ctx);
+
+/* While released: keeps the window over whatever mode the game sets, so
+   the desktop can't show between its windows. SDL_TRUE if the window grew
+   and needs repainting. */
+SDL_bool display_follow(DisplayContext *ctx);
 
 /* Takes the screen back: the mode display_release() left, re-asserted
    whatever the game did to it, and our window brought forward. */

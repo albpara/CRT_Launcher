@@ -360,7 +360,11 @@ void launcher_child_resume(LauncherChild *child) {
 }
 
 SDL_bool launcher_child_exited(const LauncherChild *child, Uint32 timeout_ms) {
-    if (WaitForSingleObject((HANDLE)child->process, timeout_ms) == WAIT_TIMEOUT) {
+    /* Message-aware waits: a focus or display change must reach the caller
+       now, not a poll interval later. */
+    HANDLE process = (HANDLE)child->process;
+    DWORD waited = MsgWaitForMultipleObjects(1, &process, FALSE, timeout_ms, QS_ALLINPUT);
+    if (waited == WAIT_TIMEOUT || waited == WAIT_OBJECT_0 + 1) {
         return SDL_FALSE;
     }
 
@@ -370,7 +374,8 @@ SDL_bool launcher_child_exited(const LauncherChild *child, Uint32 timeout_ms) {
         QueryInformationJobObject((HANDLE)child->job, JobObjectBasicAccountingInformation,
                                    &info, sizeof(info), NULL) &&
         info.ActiveProcesses > 0) {
-        SDL_Delay(timeout_ms); /* the wait above no longer blocks */
+        /* The wait above no longer blocks, so this one paces the caller. */
+        MsgWaitForMultipleObjects(0, NULL, FALSE, timeout_ms, QS_ALLINPUT);
         return SDL_FALSE;
     }
     return SDL_TRUE;
